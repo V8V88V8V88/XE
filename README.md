@@ -199,9 +199,11 @@ Possible future steps: better optimizations (e.g. bytecode or IR), more built-in
 
 ---
 
-## Project status
+## Project Status
 
-The XE compiler is a functional programming language toolchain. It features a complete pipeline from lexical analysis to native binary generation.
+**Current Version:** 1.0.0-pre-alpha
+
+The XE compiler is currently in its **Pre-Alpha** stage. While the core pipeline (Lexer → Parser → Semantic → CodeGen) is 100% functional and verified by tests, it is considered a research prototype.
 
 ---
 
