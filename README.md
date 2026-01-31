@@ -82,11 +82,13 @@ You must have the **Rust toolchain** (`cargo` and `rustc`) installed.
 
 ### 2. Build the Compiler
 ```bash
-git clone https://github.com/yourusername/xe.git
+git clone https://github.com/V8V88V8V88/XE.git
 cd xe
 cargo build --release
 ```
-The compiler binary will be created at `./target/release/xe`.
+The compiler binary will be created at `./target/release/xe` (or `xe.exe` on Windows).
+
+*Note: For macOS users, follow the same steps above to build a native binary for Apple Silicon or Intel Macs.*
 
 ## Usage
 
