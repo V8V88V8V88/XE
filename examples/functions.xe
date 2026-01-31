@@ -1,0 +1,10 @@
+# Function example
+function greet(name):
+    print("Hello " + name)
+    return 0
+
+greet("World")
+
+# Loop example
+repeat 3 times:
+    print("XE is cool!")

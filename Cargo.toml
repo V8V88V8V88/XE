@@ -1,0 +1,13 @@
+[package]
+name = "xe"
+version = "0.1.0"
+edition = "2021"
+authors = ["Vaibhav Pratap Singh <v8v88v8v88@protonmail.com>"]
+description = "XE Programming Language"
+license = "MIT"
+
+[dependencies]
+
+[[test]]
+name = "integration"
+path = "tests/unit/basic_test.rs"
