@@ -4,7 +4,7 @@
 # XE Programming Language
 </div>
 
-XE is a micro programming language that you write in one way and run in another. You write code in XE (it looks a bit like Python), and the XE compiler turns it into Rust code. Then the normal Rust compiler turns that into a program you can run. So you get easy-to-read syntax on the outside and safe, predictable execution on the inside.
+XE is a micro programming language that you write in one way and run in another. You write code in XE (it looks a bit like Python), and the XE compiler turns it into Rust code. Then the normal Rust compiler turns that into a program you can run. So you get easy-to-read syntax on the outside and safe, predictable execution on the inside.                                    
 
 This is a hobby and learning project. Do not use it in production. It is meant for people who want to see how a simple language and compiler are built.
 
@@ -28,7 +28,7 @@ So XE does not run your code directly. It translates it to Rust and lets Rust ha
 
 ## Why XE?
 
-A lot of languages force you to choose: easy to use *or* safe and fast. Low-level languages (like C) give you control but also more ways to make mistakes (memory bugs, crashes). High-level languages (like Python) are easier to write but often slower and sometimes less predictable.
+A lot of languages force you to choose: easy to use *or* safe and fast. Low-level languages (like C) give you control but also more ways to make mistakes (memory bugs, crashes). High-level languages (like Python) are easier to write but often slower and sometimes less predictable.                                                                                             
 
 XE tries to give you both in a small package:
 
@@ -75,20 +75,42 @@ So: XE source → Lexer → Parser → AST → Semantic check → Rust code → 
 
 ---
 
+## Documentation
+
+The project now uses a standard docs site inside `docs/`:
+
+- **Main entry:** `docs/index.md`
+- **Guides:** Getting started, Language basics, Examples.
+- **References:** CLI, Language, Status.
+
+You can run the docs locally:
+
+```bash
+cd docs
+bun install
+bun run docs:dev
+```
+
+*(You can also build the docs using `bun run docs:build`.)*
+
+---
+
 ## Getting Started
 
 ### 1. Prerequisites
-You must have the **Rust toolchain** (`cargo` and `rustc`) installed.
+You must have the **[Rust toolchain](https://rustup.rs/)** (`cargo` and `rustc`) installed.
 
 ### 2. Build the Compiler
 ```bash
 git clone https://github.com/V8V88V8V88/XE.git
-cd xe
+cd XE
 cargo build --release
 ```
 The compiler binary will be created at `./target/release/xe` (or `xe.exe` on Windows).
 
 *Note: For macOS users, follow the same steps above to build a native binary for Apple Silicon or Intel Macs.*
+
+---
 
 ## Usage
 

@@ -1,5 +1,4 @@
-# Recursive Fibonacci. Computes fib(35) to demonstrate native compilation speed.
-function fib(n):
+def fib(n):
     if n <= 1:
         return n
     return fib(n - 1) + fib(n - 2)

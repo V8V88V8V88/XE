@@ -1,0 +1,7 @@
+# Recursive sum 1 to N. Computes 1+2+...+n without a loop variable.
+function sum_to_n(n):
+    if n <= 0:
+        return 0
+    return n + sum_to_n(n - 1)
+
+print("Sum 1 to 10:", sum_to_n(10))

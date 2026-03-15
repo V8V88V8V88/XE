@@ -1,1 +1,2 @@
+# Prints a message to the screen. Basic output demo.
 print("Hello, World!")

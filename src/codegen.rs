@@ -285,7 +285,6 @@ fn xe_index(obj: &XeValue, idx: &XeValue) -> XeValue {
                 ));
                 self.indent_level += 1;
 
-                // Make params mutable
                 for param in params {
                     self.emit_indent();
                     self.emit(&format!(
@@ -299,9 +298,14 @@ fn xe_index(obj: &XeValue, idx: &XeValue) -> XeValue {
                     self.generate_statement(s);
                 }
 
-                // Default return
-                self.emit_indent();
-                self.emit("XeValue::Number(0.0)\n");
+                let ends_with_return = body
+                    .last()
+                    .map(|s| matches!(s.kind, StatementKind::Return { .. }))
+                    .unwrap_or(false);
+                if !ends_with_return {
+                    self.emit_indent();
+                    self.emit("XeValue::Number(0.0)\n");
+                }
 
                 self.indent_level -= 1;
                 self.emit("}\n");

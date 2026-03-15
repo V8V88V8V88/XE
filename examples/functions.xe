@@ -1,10 +1,9 @@
-# Function example
+# User-defined function + repeat loop. Greets by name, then repeats a message N times.
 function greet(name):
     print("Hello " + name)
     return 0
 
 greet("World")
 
-# Loop example
 repeat 3 times:
     print("XE is cool!")

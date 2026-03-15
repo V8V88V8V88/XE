@@ -1,0 +1,9 @@
+# Built-ins: length, type, convert. Demonstrates introspection and type conversion.
+print("length of 'hello':", length("hello"))
+print("length of [1, 2, 3]:", length([1, 2, 3]))
+print("type of 42:", type(42))
+print("type of 'hello':", type("hello"))
+print("type of true:", type(true))
+
+x = convert("100", "number")
+print("converted:", x + 5)

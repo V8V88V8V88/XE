@@ -1,5 +1,5 @@
-# Conditional example
-age = 18
+# if/else branching. Checks age and prints Adult or Minor based on condition.
+age = 12
 
 if age >= 18:
     print("Adult")

@@ -1,0 +1,8 @@
+# Lists, indexing, length, and convert. Accesses list items and gets length.
+fruits = ["apple", "banana", "cherry"]
+print("First fruit: " + fruits[0])
+print("Second fruit: " + fruits[1])
+print("List length: " + convert(length(fruits), "text"))
+
+numbers = [10, 20, 30]
+print(numbers[0] + numbers[1])

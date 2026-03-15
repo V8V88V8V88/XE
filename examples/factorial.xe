@@ -1,0 +1,8 @@
+# Recursive factorial. Computes n! (e.g. 5! = 120).
+function factorial(n):
+    if n <= 0:
+        return 1
+    return n * factorial(n - 1)
+
+print("5! =", factorial(5))
+print("6! =", factorial(6))

@@ -1,0 +1,8 @@
+# User input + convert. Reads name and age from user, converts age to number for math.
+name = input("Enter your name: ")
+print("Hello, " + name)
+
+age_text = input("Enter your age: ")
+age = convert(age_text, "number")
+next_year = age + 1
+print("Next year you will be: " + convert(next_year, "text"))

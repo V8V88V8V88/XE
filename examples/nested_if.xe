@@ -1,0 +1,11 @@
+# Nested if/else with boolean. Age check + ticket check.
+age = 20
+has_ticket = true
+
+if age >= 18:
+    if has_ticket:
+        print("You can enter")
+    else:
+        print("Need a ticket")
+else:
+    print("Must be 18 or older")

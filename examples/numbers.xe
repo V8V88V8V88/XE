@@ -1,3 +1,4 @@
+# Variables and arithmetic. Stores numbers, adds them, prints result.
 x = 10
 y = 20
 print(x + y)

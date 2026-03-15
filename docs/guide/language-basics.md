@@ -1,0 +1,184 @@
+# Language Basics
+
+XE is intentionally small. The syntax is indentation-based and close to Python in shape, but the compiler lowers everything into Rust.
+
+## Hello World
+
+Every language starts with printing a message.
+
+```xe
+print("Hello, World!")
+```
+
+`print` is a built-in function. It writes values to the screen.
+
+## Numbers and variables
+
+Variables are just names that hold values.
+
+```xe
+x = 10
+y = 20
+print(x + y)
+```
+
+What happens:
+
+- `x` gets `10`
+- `y` gets `20`
+- `x + y` evaluates to `30`
+- `print` shows the result
+
+Arithmetic operators available now:
+
+- `+`
+- `-`
+- `*`
+- `/`
+- `%`
+
+## Text
+
+Text values are written in double quotes.
+
+```xe
+name = "XE"
+print("Hello " + name)
+```
+
+The `+` operator can also join text values.
+
+## Booleans
+
+Boolean values are `true` and `false`.
+
+```xe
+ready = true
+print(type(ready))
+```
+
+## Input and conversion
+
+`input()` always returns text, even when the user types digits. Convert it before using it as a number.
+
+```xe
+age_text = input("Enter your age: ")
+age = convert(age_text, "number")
+
+if age >= 18:
+    print("Adult")
+else:
+    print("Minor")
+```
+
+Valid conversion targets currently documented in XE:
+
+- `"number"`
+- `"text"`
+- `"boolean"`
+
+## Conditionals
+
+XE uses indentation-based blocks for `if` and `else`.
+
+```xe
+score = 82
+
+if score >= 90:
+    print("A")
+else:
+    print("Keep going")
+```
+
+Comparison operators:
+
+- `==`
+- `!=`
+- `<`
+- `>`
+- `<=`
+- `>=`
+
+Logical operators:
+
+- `and`
+- `or`
+- `not`
+
+## Repeat loops
+
+XE currently has fixed-count loops through `repeat N times`.
+
+```xe
+repeat 3 times:
+    print("XE")
+```
+
+`N` can be a number or a variable that stores a number.
+
+## Functions
+
+Functions let you name reusable logic.
+
+```xe
+function add(a, b):
+    return a + b
+
+print(add(3, 5))
+```
+
+You can also define functions that do an action and return `0`:
+
+```xe
+function greet(name):
+    print("Hello " + name)
+    return 0
+
+greet("World")
+```
+
+## Recursion
+
+Recursion works and is useful for classic examples like Fibonacci.
+
+```xe
+function fib(n):
+    if n <= 1:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+print(fib(10))
+```
+
+## Lists
+
+Lists hold ordered values.
+
+```xe
+fruits = ["apple", "banana", "cherry"]
+print(fruits[0])
+print(length(fruits))
+```
+
+Notes:
+
+- list indexing starts at `0`
+- `fruits[0]` is the first element
+- `length(fruits)` returns the number of elements
+
+## Built-ins
+
+Current built-ins:
+
+- `print(...)`
+- `input(prompt)`
+- `length(value)`
+- `type(value)`
+- `convert(value, "target")`
+
+## Quick summary
+
+- Data types: number, text, boolean, list
+- Control flow: `if`, `else`, `repeat N times`
+- Functions: `function name(args):` and `return`
+- Blocks: indentation with spaces, not braces
