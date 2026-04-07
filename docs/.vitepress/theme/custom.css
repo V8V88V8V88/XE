@@ -1,8 +1,8 @@
 :root {
-  --vp-c-brand-1: #b69357;
-  --vp-c-brand-2: #9d7d47;
-  --vp-c-brand-3: #d4ba8b;
-  --vp-c-brand-soft: rgba(182, 147, 87, 0.14);
+  --vp-c-brand-1: #c07a34;
+  --vp-c-brand-2: #a9652c;
+  --vp-c-brand-3: #d89c64;
+  --vp-c-brand-soft: rgba(192, 122, 52, 0.16);
   --vp-c-bg: #f4f1eb;
   --vp-c-bg-alt: #ece6db;
   --vp-c-bg-soft: #e6dfd2;
@@ -36,10 +36,10 @@
 }
 
 .dark {
-  --vp-c-brand-1: #b88d4c;
-  --vp-c-brand-2: #9d7d47;
-  --vp-c-brand-3: #ebd8ae;
-  --vp-c-brand-soft: rgba(184, 141, 76, 0.2);
+  --vp-c-brand-1: #cf8540;
+  --vp-c-brand-2: #b26e31;
+  --vp-c-brand-3: #ebb37f;
+  --vp-c-brand-soft: rgba(207, 133, 64, 0.22);
   --vp-c-bg: #11100d;
   --vp-c-bg-alt: #171511;
   --vp-c-bg-soft: #1d1a15;
@@ -105,7 +105,7 @@ body {
 .VPHomeHero .text {
   max-width: 11ch;
   font-size: clamp(2.9rem, 7vw, 5.8rem);
-  line-height: 0.94;
+  line-height: 1.02;
   letter-spacing: -0.05em;
 }
 
@@ -119,29 +119,28 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 32px;
-  border: 1px solid var(--vp-c-border);
-  background: color-mix(in srgb, var(--vp-c-bg-elv) 94%, transparent);
-  box-shadow:
-    0 24px 60px rgba(0, 0, 0, 0.08),
-    0 0 0 1px rgba(255, 255, 255, 0.02),
-    0 0 88px color-mix(in srgb, var(--vp-c-brand-1) 18%, transparent);
-  padding: 20px;
+  padding: 0;
 }
 
 .VPHomeHero .image-container {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 100%;
-  height: 100%;
+  width: min(100%, 260px);
+  height: min(100%, 260px);
   transform: none !important;
 }
 
 .VPHomeHero .image-src {
   display: block;
-  max-width: 240px;
+  max-width: 220px;
   margin: 0 auto;
+  border-radius: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow:
+    0 18px 40px rgba(0, 0, 0, 0.24),
+    0 0 64px color-mix(in srgb, var(--vp-c-brand-1) 16%, transparent);
+  overflow: hidden;
 }
 
 .VPButton.alt {
@@ -448,9 +447,36 @@ body {
   .xe-dual {
     grid-template-columns: 1fr;
   }
+
+  .VPHomeHero .image-container {
+    width: min(100%, 220px);
+    height: min(100%, 220px);
+  }
 }
 
 @media (max-width: 768px) {
+  .VPHomeHero .container,
+  .VPHomeHero .main,
+  .VPHomeHero .actions {
+    position: relative;
+    z-index: 1;
+  }
+
+  .VPHomeHero .text {
+    max-width: none;
+    font-size: clamp(2.8rem, 15vw, 4.1rem);
+    line-height: 1.04;
+  }
+
+  .VPHomeHero .tagline {
+    font-size: 0.98rem;
+    line-height: 1.7;
+  }
+
+  .VPHomeHero .image {
+    display: none;
+  }
+
   .VPHomeHero {
     padding-top: 20px;
   }
@@ -474,5 +500,10 @@ body {
   .xe-code-block pre,
   .xe-command {
     font-size: 0.88rem;
+  }
+
+  .VPHomeHero .image-container {
+    width: min(100%, 240px);
+    height: min(100%, 240px);
   }
 }

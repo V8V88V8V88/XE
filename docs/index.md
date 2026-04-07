@@ -2,8 +2,8 @@
 layout: home
 
 hero:
-  name: XE
-  text: Write a small language. Ship a real binary.
+  name: XE Docs
+  text: Getting started with XE, a transpiled lang.
   tagline: XE keeps the syntax readable, lowers your program into Rust, and lets rustc produce the final executable. It is compact enough to study directly and serious enough to demo cleanly.
   image:
     src: /XElogo.png
