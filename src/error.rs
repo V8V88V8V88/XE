@@ -36,9 +36,18 @@ pub enum XeErrorKind {
     // Semantic errors
     UndefinedVariable(String),
     UndefinedFunction(String),
-    WrongArgumentCount { name: String, expected: usize, got: usize },
-    TypeMismatch { expected: String, got: String },
+    WrongArgumentCount {
+        name: String,
+        expected: usize,
+        got: usize,
+    },
+    TypeMismatch {
+        expected: String,
+        got: String,
+    },
     CannotRedefineBuiltin(String),
+    DuplicateFunction(String),
+    ReturnOutsideFunction,
     BreakOutsideLoop,
     ContinueOutsideLoop,
 
@@ -57,7 +66,11 @@ pub struct XeError {
 impl XeError {
     pub fn new(kind: XeErrorKind, span: Option<Span>) -> Self {
         let message = Self::format_message(&kind);
-        Self { kind, span, message }
+        Self {
+            kind,
+            span,
+            message,
+        }
     }
 
     fn format_message(kind: &XeErrorKind) -> String {
@@ -72,14 +85,27 @@ impl XeError {
             XeErrorKind::InvalidIndentation => "invalid indentation".to_string(),
             XeErrorKind::UndefinedVariable(name) => format!("undefined variable '{}'", name),
             XeErrorKind::UndefinedFunction(name) => format!("undefined function '{}'", name),
-            XeErrorKind::WrongArgumentCount { name, expected, got } => {
-                format!("function '{}' expects {} arguments, got {}", name, expected, got)
+            XeErrorKind::WrongArgumentCount {
+                name,
+                expected,
+                got,
+            } => {
+                format!(
+                    "function '{}' expects {} arguments, got {}",
+                    name, expected, got
+                )
             }
             XeErrorKind::TypeMismatch { expected, got } => {
                 format!("type mismatch: expected {}, got {}", expected, got)
             }
             XeErrorKind::CannotRedefineBuiltin(name) => {
                 format!("cannot redefine built-in function '{}'", name)
+            }
+            XeErrorKind::DuplicateFunction(name) => {
+                format!("function '{}' is already defined", name)
+            }
+            XeErrorKind::ReturnOutsideFunction => {
+                "return can only be used inside a function".to_string()
             }
             XeErrorKind::BreakOutsideLoop => "break can only be used inside a loop".to_string(),
             XeErrorKind::ContinueOutsideLoop => {

@@ -14,6 +14,7 @@ xe help
 - Without `-o`, prints generated Rust code to standard output
 - With `-o`, writes temporary Rust code and then invokes `rustc` to create a native executable
 - `compile -o` produces a binary, not a saved `.rs` source file
+- Extra arguments are rejected instead of being ignored
 
 ## `run`
 

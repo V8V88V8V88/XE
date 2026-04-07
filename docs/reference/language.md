@@ -77,6 +77,15 @@ function name(arg1, arg2):
     return arg1 + arg2
 ```
 
+Functions currently use their own local scope. They can access:
+
+- parameters
+- variables created inside the function
+- built-in functions
+- other user-defined functions
+
+They do not capture outer variables from surrounding scopes.
+
 ## Notes on formatting
 
 - XE uses indentation-based blocks

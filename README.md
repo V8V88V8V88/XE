@@ -4,7 +4,7 @@
 # XE Programming Language
 </div>
 
-XE is a micro programming language that you write in one way and run in another. You write code in XE (it looks a bit like Python), and the XE compiler turns it into Rust code. Then the normal Rust compiler turns that into a program you can run. So you get easy-to-read syntax on the outside and safe, predictable execution on the inside.                                    
+XE is a small programming language that compiles into Rust source code and then into a native executable through `rustc`. Its syntax is indentation-based and intentionally compact so the compiler pipeline stays easy to study.
 
 This is a hobby and learning project. Do not use it in production. It is meant for people who want to see how a simple language and compiler are built.
 
@@ -18,35 +18,33 @@ XE is a **source-to-source** language. That means:
 2. The XE compiler reads it and outputs Rust source code.
 3. You (or the tooling) run the Rust compiler on that code to get an executable.
 
-So XE does not run your code directly. It translates it to Rust and lets Rust handle memory, safety, and producing the final binary. You get:
+So XE does not run your code directly. It translates it to Rust and lets Rust handle the final native build. You get:
 
 - **Simple syntax** – English-like, Python-style, so it is easy to read.
-- **No manual memory, no pointers** – you do not manage memory yourself; the generated Rust code is safe.
-- **Predictable behavior** – the design avoids undefined behavior and unsafe constructs.
+- **Native build output** – XE can produce a standalone executable through Rust.
+- **A compact compiler codebase** – lexer, parser, semantic checks, and code generation are all easy to inspect.
 
 ---
 
 ## Why XE?
 
-A lot of languages force you to choose: easy to use *or* safe and fast. Low-level languages (like C) give you control but also more ways to make mistakes (memory bugs, crashes). High-level languages (like Python) are easier to write but often slower and sometimes less predictable.                                                                                             
+XE is primarily a compiler project:
 
-XE tries to give you both in a small package:
+- It gives you a small language to experiment with.
+- It shows a complete frontend-to-codegen pipeline.
+- It produces native binaries instead of interpreting the source directly.
 
-- Write in a simple, readable language.
-- Run as safe Rust underneath, so you get Rust’s safety and performance without writing Rust yourself.
-
-It is also a good way to learn how compilers work: lexer, parser, AST, semantic checks, and code generation.
+The main goal is clarity and implementation quality, not feature count.
 
 ---
 
 ## Benefits
 
-- **Fast** – Your XE code becomes Rust, and Rust compiles to native code. So your program runs at normal native speed, not in an interpreter.
-- **Safe** – No pointers, no manual memory. The generated Rust is safe Rust, so you avoid memory leaks, buffer overflows, and crashes from bad memory use.
-- **Easy to read and predictable** – Python-like, English-like syntax so you can follow the code. The language avoids undefined behavior and unsafe tricks, so what you write has a clear, consistent meaning.
-- **Portable** – The output is Rust, and Rust runs on many platforms (Windows, Linux, macOS, etc.). So your XE program can be built and run wherever Rust is supported.
-- **Clear errors** – The compiler aims for clear, meaningful messages when something is wrong (syntax, types, or logic), so you can fix issues without guessing.
-- **Good for learning** – Small language, clear pipeline (lexer → parser → AST → code gen). You can see how a compiler works without a huge codebase.
+- **Readable syntax** – indentation-based and easy to follow in examples.
+- **Native executables** – XE uses `rustc` to build platform binaries.
+- **Clear structure** – lexer, parser, semantic analysis, and code generation are separated cleanly.
+- **Useful diagnostics** – compiler errors include line/column context and a caret marker.
+- **Good for learning** – the codebase is small enough to understand without a large framework.
 
 ---
 
@@ -135,18 +133,22 @@ Emits the Rust source XE generates to standard output.
 
 ---
 
-## Performance Comparison
+## Benchmark
 
-XE is designed for native execution. In a recursive Fibonacci benchmark (`fib(35)`), XE outperforms standard Python and provides a foundation for high-performance execution.
+The repository includes a reproducible benchmark that compares XE with CPython on the same recursive Fibonacci workload:
 
-| Language | Execution Time (Lower is better) |
-| :--- | :--- |
-| **XE (Native)** | **~0.56s** |
-| Python 3 | ~0.69s |
-| Java (OpenJDK 21) | ~0.82s* |
-| Node.js | ~0.14s |
+```bash
+python3 examples/benchmark.py
+```
 
-*Note: Benchmarks performed on Fedora 43. XE's performance comes from its Rust-based backend and native compilation. Java's time includes JVM startup overhead (Cold Start).*
+The script:
+
+- builds the XE compiler in release mode if needed
+- compiles `examples/benchmark.xe` into a native binary
+- runs both implementations multiple times
+- prints the mean runtime and the Python/XE speedup ratio
+
+Use the script output for screenshots or performance notes, because the exact numbers depend on your machine.
 
 ---
 
@@ -177,6 +179,8 @@ You can define functions, e.g.:
 function greet(name):
     print("Hello " + name)
 ```
+
+Functions currently use local scope only. They do not capture outer variables.
 
 **Built-in functions**
 
@@ -239,7 +243,7 @@ Possible future steps: better optimizations (e.g. bytecode or IR), more built-in
 
 ## Project Status
 
-**Current Version:** 1.0.0-pre-alpha
+**Current Version:** 0.1.1 pre-alpha
 
 The XE compiler is currently in its **Pre-Alpha** stage. The core pipeline works and is covered by integration tests, but the project is still a research prototype.
 
@@ -256,4 +260,4 @@ Recent milestone work completed:
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under GPL-3.0-or-later - see the [LICENSE](LICENSE) file for details.

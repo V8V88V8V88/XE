@@ -58,9 +58,9 @@ download() {
   local output="$2"
 
   if need_cmd curl; then
-    curl -fsSL "$url" -o "$output"
+    curl -fsSL "$url" -o "$output" || fail "failed to download ${url}. Check that the requested XE release exists and is publicly accessible."
   elif need_cmd wget; then
-    wget -qO "$output" "$url"
+    wget -qO "$output" "$url" || fail "failed to download ${url}. Check that the requested XE release exists and is publicly accessible."
   else
     fail "curl or wget is required to download XE."
   fi
@@ -87,6 +87,7 @@ main() {
   fi
 
   tmp_dir="$(mktemp -d)"
+  trap 'rm -rf "$tmp_dir"' EXIT
   archive_path="${tmp_dir}/${asset}"
 
   log "Downloading ${asset}..."

@@ -3,6 +3,11 @@ import { defineConfig } from "vitepress";
 export default defineConfig({
   title: "XE",
   description: "A small programming language that compiles into Rust and runs as a native binary.",
+  markdown: {
+    languageAlias: {
+      xe: "python",
+    },
+  },
   themeConfig: {
     logo: "/XElogo.png",
     nav: [
@@ -36,7 +41,7 @@ export default defineConfig({
     socialLinks: [{ icon: "github", link: "https://github.com/V8V88V8V88/XE" }],
     footer: {
       message: "Pre-alpha language project built for learning and experimentation.",
-      copyright: "Released under the MIT License",
+      copyright: "Released under GPL-3.0-or-later",
     },
     outline: "deep",
     search: {

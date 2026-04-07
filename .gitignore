@@ -9,4 +9,9 @@
 /test_run*.xe
 /xe_test_*
 /xe_run_*
+/bin/
+/examples/fib
+/examples/name
+/examples/xe
+/examples/*.exe
 .qoder/

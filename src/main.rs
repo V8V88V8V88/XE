@@ -60,6 +60,10 @@ fn print_compile_error(source: &str, error: &XeError) {
     eprintln!("{}", error.render_with_source(source));
 }
 
+fn clean_temp_dir(path: &std::path::Path) {
+    let _ = fs::remove_dir_all(path);
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
@@ -84,10 +88,11 @@ fn main() {
 
             match compile(&source) {
                 Ok(rust_code) => {
-                    // Check for -o flag
-                    if args.len() >= 5 && args[3] == "-o" {
+                    if args.len() == 3 {
+                        print!("{}", rust_code);
+                    } else if args.len() == 5 && args[3] == "-o" {
                         let output_file = &args[4];
-                        
+
                         // Create a temporary .rs file
                         let temp_rs = format!("{}.rs", output_file);
                         if let Err(e) = fs::write(&temp_rs, &rust_code) {
@@ -125,7 +130,9 @@ fn main() {
                             }
                         }
                     } else {
-                        print!("{}", rust_code);
+                        eprintln!("Error: Invalid compile arguments");
+                        eprintln!("Usage: xe compile <file.xe> [-o <output>]");
+                        std::process::exit(1);
                     }
                 }
                 Err(e) => {
@@ -170,6 +177,7 @@ fn main() {
             // Write Rust code
             if let Err(e) = fs::write(&rust_file, &rust_code) {
                 eprintln!("Error writing temp file: {}", e);
+                clean_temp_dir(&temp_dir);
                 std::process::exit(1);
             }
 
@@ -190,12 +198,14 @@ fn main() {
                     if !output.status.success() {
                         eprintln!("Rust compilation failed:");
                         io::stderr().write_all(&output.stderr).unwrap();
+                        clean_temp_dir(&temp_dir);
                         std::process::exit(1);
                     }
                 }
                 Err(e) => {
                     eprintln!("Failed to run rustc: {}", e);
                     eprintln!("Make sure Rust is installed and rustc is in your PATH");
+                    clean_temp_dir(&temp_dir);
                     std::process::exit(1);
                 }
             }
@@ -207,15 +217,16 @@ fn main() {
                 .stderr(Stdio::inherit())
                 .status();
 
-            match run_result {
-                Ok(status) => {
-                    std::process::exit(status.code().unwrap_or(1));
-                }
+            let exit_code = match run_result {
+                Ok(status) => status.code().unwrap_or(1),
                 Err(e) => {
                     eprintln!("Failed to run program: {}", e);
-                    std::process::exit(1);
+                    1
                 }
-            }
+            };
+
+            clean_temp_dir(&temp_dir);
+            std::process::exit(exit_code);
         }
         _ => {
             eprintln!("Unknown command: {}", args[1]);

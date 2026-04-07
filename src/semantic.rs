@@ -15,6 +15,7 @@ pub struct SemanticAnalyzer {
     scopes: Vec<HashSet<String>>,
     functions: HashMap<String, usize>, // name -> param count
     loop_depth: usize,
+    function_depth: usize,
 }
 
 impl SemanticAnalyzer {
@@ -29,6 +30,7 @@ impl SemanticAnalyzer {
             scopes: vec![HashSet::new()],
             functions,
             loop_depth: 0,
+            function_depth: 0,
         }
     }
 
@@ -39,6 +41,12 @@ impl SemanticAnalyzer {
                 if BUILTINS.iter().any(|(n, _)| n == name) {
                     return Err(XeError::new(
                         XeErrorKind::CannotRedefineBuiltin(name.clone()),
+                        Some(stmt.span.clone()),
+                    ));
+                }
+                if self.functions.contains_key(name) {
+                    return Err(XeError::new(
+                        XeErrorKind::DuplicateFunction(name.clone()),
                         Some(stmt.span.clone()),
                     ));
                 }
@@ -117,17 +125,29 @@ impl SemanticAnalyzer {
                 self.pop_scope();
                 self.loop_depth -= 1;
             }
-            StatementKind::FunctionDef { name: _, params, body } => {
-                self.push_scope();
+            StatementKind::FunctionDef {
+                name: _,
+                params,
+                body,
+            } => {
+                let saved_scopes = std::mem::replace(&mut self.scopes, vec![HashSet::new()]);
+                self.function_depth += 1;
                 for param in params {
                     self.define_variable(param);
                 }
                 for s in body {
                     self.analyze_statement(s)?;
                 }
-                self.pop_scope();
+                self.function_depth -= 1;
+                self.scopes = saved_scopes;
             }
             StatementKind::Return { value } => {
+                if self.function_depth == 0 {
+                    return Err(XeError::new(
+                        XeErrorKind::ReturnOutsideFunction,
+                        Some(stmt.span.clone()),
+                    ));
+                }
                 if let Some(expr) = value {
                     self.analyze_expression(expr)?;
                 }
@@ -157,9 +177,7 @@ impl SemanticAnalyzer {
 
     fn analyze_expression(&mut self, expr: &Expression) -> XeResult<()> {
         match &expr.kind {
-            ExpressionKind::Number(_)
-            | ExpressionKind::String(_)
-            | ExpressionKind::Boolean(_) => {}
+            ExpressionKind::Number(_) | ExpressionKind::String(_) | ExpressionKind::Boolean(_) => {}
 
             ExpressionKind::Identifier(name) => {
                 if !self.is_variable_defined(name) {

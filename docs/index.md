@@ -3,8 +3,8 @@ layout: home
 
 hero:
   name: XE Docs
-  text: Getting started with XE, a transpiled lang.
-  tagline: XE keeps the syntax readable, lowers your program into Rust, and lets rustc produce the final executable. It is compact enough to study directly and serious enough to demo cleanly.
+  text: Documentation for the XE language and compiler.
+  tagline: XE uses indentation-based syntax, compiles to Rust, and produces native executables through rustc.
   image:
     src: /XElogo.png
     alt: XE logo

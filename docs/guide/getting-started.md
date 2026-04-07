@@ -16,10 +16,12 @@ Useful variants:
 
 ```bash
 XE_INSTALL_DIR="$HOME/bin" curl -fsSL https://xe-lang.vercel.app/install.sh | bash
-XE_VERSION="v0.1.0" curl -fsSL https://xe-lang.vercel.app/install.sh | bash
+XE_VERSION="v0.1.1" curl -fsSL https://xe-lang.vercel.app/install.sh | bash
 ```
 
 If you are on Windows, use the release zip from GitHub Releases for now.
+
+Release binaries are published from the public GitHub repository, so the installer expects public release assets.
 
 ## Build from source
 

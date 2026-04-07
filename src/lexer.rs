@@ -128,7 +128,8 @@ impl Lexer {
             // Emit remaining dedents
             while self.indent_stack.len() > 1 {
                 self.indent_stack.pop();
-                self.pending_tokens.push(Token::new(TokenKind::Dedent, self.line, self.column));
+                self.pending_tokens
+                    .push(Token::new(TokenKind::Dedent, self.line, self.column));
             }
             if let Some(token) = self.pending_tokens.pop() {
                 return Ok(token);
@@ -213,7 +214,8 @@ impl Lexer {
         } else if indent < current_indent {
             while self.indent_stack.len() > 1 && *self.indent_stack.last().unwrap() > indent {
                 self.indent_stack.pop();
-                self.pending_tokens.push(Token::new(TokenKind::Dedent, self.line, 1));
+                self.pending_tokens
+                    .push(Token::new(TokenKind::Dedent, self.line, 1));
             }
             if *self.indent_stack.last().unwrap() != indent {
                 return Err(XeError::new(
@@ -264,7 +266,11 @@ impl Lexer {
         }
 
         self.advance(); // consume closing quote
-        Ok(Token::new(TokenKind::String(value), start_line, start_column))
+        Ok(Token::new(
+            TokenKind::String(value),
+            start_line,
+            start_column,
+        ))
     }
 
     fn scan_number(&mut self) -> XeResult<Token> {

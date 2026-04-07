@@ -571,104 +571,102 @@ fn xe_iter(value: &XeValue) -> Vec<XeValue> {
             ExpressionKind::Identifier(name) => {
                 self.emit(&format!("{}.clone()", Self::sanitize_name(name)));
             }
-            ExpressionKind::BinaryOp { left, op, right } => {
-                match op {
-                    BinaryOperator::Add => {
-                        self.emit("xe_add(");
-                        self.generate_expression(left);
-                        self.emit(", ");
-                        self.generate_expression(right);
-                        self.emit(")");
-                    }
-                    BinaryOperator::Subtract => {
-                        self.emit("xe_sub(");
-                        self.generate_expression(left);
-                        self.emit(", ");
-                        self.generate_expression(right);
-                        self.emit(")");
-                    }
-                    BinaryOperator::Multiply => {
-                        self.emit("xe_mul(");
-                        self.generate_expression(left);
-                        self.emit(", ");
-                        self.generate_expression(right);
-                        self.emit(")");
-                    }
-                    BinaryOperator::Divide => {
-                        self.emit("xe_div(");
-                        self.generate_expression(left);
-                        self.emit(", ");
-                        self.generate_expression(right);
-                        self.emit(")");
-                    }
-                    BinaryOperator::Modulo => {
-                        self.emit("xe_mod(");
-                        self.generate_expression(left);
-                        self.emit(", ");
-                        self.generate_expression(right);
-                        self.emit(")");
-                    }
-                    BinaryOperator::Equal => {
-                        self.emit("XeValue::Boolean(xe_eq(&");
-                        self.generate_expression(left);
-                        self.emit(", &");
-                        self.generate_expression(right);
-                        self.emit("))");
-                    }
-                    BinaryOperator::NotEqual => {
-                        self.emit("XeValue::Boolean(!xe_eq(&");
-                        self.generate_expression(left);
-                        self.emit(", &");
-                        self.generate_expression(right);
-                        self.emit("))");
-                    }
-                    BinaryOperator::Less => {
-                        self.emit("XeValue::Boolean(xe_lt(&");
-                        self.generate_expression(left);
-                        self.emit(", &");
-                        self.generate_expression(right);
-                        self.emit("))");
-                    }
-                    BinaryOperator::Greater => {
-                        self.emit("XeValue::Boolean(xe_gt(&");
-                        self.generate_expression(left);
-                        self.emit(", &");
-                        self.generate_expression(right);
-                        self.emit("))");
-                    }
-                    BinaryOperator::LessEqual => {
-                        self.emit("XeValue::Boolean(xe_le(&");
-                        self.generate_expression(left);
-                        self.emit(", &");
-                        self.generate_expression(right);
-                        self.emit("))");
-                    }
-                    BinaryOperator::GreaterEqual => {
-                        self.emit("XeValue::Boolean(xe_ge(&");
-                        self.generate_expression(left);
-                        self.emit(", &");
-                        self.generate_expression(right);
-                        self.emit("))");
-                    }
-                    BinaryOperator::And => {
-                        self.emit("XeValue::Boolean(");
-                        self.generate_condition(left);
-                        self.emit(" && ");
-                        self.generate_condition(right);
-                        self.emit(")");
-                    }
-                    BinaryOperator::Or => {
-                        self.emit("XeValue::Boolean(");
-                        self.generate_condition(left);
-                        self.emit(" || ");
-                        self.generate_condition(right);
-                        self.emit(")");
-                    }
+            ExpressionKind::BinaryOp { left, op, right } => match op {
+                BinaryOperator::Add => {
+                    self.emit("xe_add(");
+                    self.generate_expression(left);
+                    self.emit(", ");
+                    self.generate_expression(right);
+                    self.emit(")");
                 }
-            }
+                BinaryOperator::Subtract => {
+                    self.emit("xe_sub(");
+                    self.generate_expression(left);
+                    self.emit(", ");
+                    self.generate_expression(right);
+                    self.emit(")");
+                }
+                BinaryOperator::Multiply => {
+                    self.emit("xe_mul(");
+                    self.generate_expression(left);
+                    self.emit(", ");
+                    self.generate_expression(right);
+                    self.emit(")");
+                }
+                BinaryOperator::Divide => {
+                    self.emit("xe_div(");
+                    self.generate_expression(left);
+                    self.emit(", ");
+                    self.generate_expression(right);
+                    self.emit(")");
+                }
+                BinaryOperator::Modulo => {
+                    self.emit("xe_mod(");
+                    self.generate_expression(left);
+                    self.emit(", ");
+                    self.generate_expression(right);
+                    self.emit(")");
+                }
+                BinaryOperator::Equal => {
+                    self.emit("XeValue::Boolean(xe_eq(&");
+                    self.generate_expression(left);
+                    self.emit(", &");
+                    self.generate_expression(right);
+                    self.emit("))");
+                }
+                BinaryOperator::NotEqual => {
+                    self.emit("XeValue::Boolean(!xe_eq(&");
+                    self.generate_expression(left);
+                    self.emit(", &");
+                    self.generate_expression(right);
+                    self.emit("))");
+                }
+                BinaryOperator::Less => {
+                    self.emit("XeValue::Boolean(xe_lt(&");
+                    self.generate_expression(left);
+                    self.emit(", &");
+                    self.generate_expression(right);
+                    self.emit("))");
+                }
+                BinaryOperator::Greater => {
+                    self.emit("XeValue::Boolean(xe_gt(&");
+                    self.generate_expression(left);
+                    self.emit(", &");
+                    self.generate_expression(right);
+                    self.emit("))");
+                }
+                BinaryOperator::LessEqual => {
+                    self.emit("XeValue::Boolean(xe_le(&");
+                    self.generate_expression(left);
+                    self.emit(", &");
+                    self.generate_expression(right);
+                    self.emit("))");
+                }
+                BinaryOperator::GreaterEqual => {
+                    self.emit("XeValue::Boolean(xe_ge(&");
+                    self.generate_expression(left);
+                    self.emit(", &");
+                    self.generate_expression(right);
+                    self.emit("))");
+                }
+                BinaryOperator::And => {
+                    self.emit("XeValue::Boolean(");
+                    self.generate_condition(left);
+                    self.emit(" && ");
+                    self.generate_condition(right);
+                    self.emit(")");
+                }
+                BinaryOperator::Or => {
+                    self.emit("XeValue::Boolean(");
+                    self.generate_condition(left);
+                    self.emit(" || ");
+                    self.generate_condition(right);
+                    self.emit(")");
+                }
+            },
             ExpressionKind::UnaryOp { op, operand } => match op {
                 UnaryOperator::Negate => {
-                self.emit("XeValue::Number(-(");
+                    self.emit("XeValue::Number(-(");
                     self.emit("xe_expect_number(&");
                     self.generate_expression(operand);
                     self.emit(", \"unary '-'\"))");
