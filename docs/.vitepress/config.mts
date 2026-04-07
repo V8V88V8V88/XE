@@ -23,6 +23,11 @@ export default defineConfig({
           items: [
             { text: "Getting Started", link: "/guide/getting-started" },
             { text: "Language Basics", link: "/guide/language-basics" },
+            { text: "Syntax and Blocks", link: "/guide/syntax-and-blocks" },
+            { text: "Types and Values", link: "/guide/types-and-values" },
+            { text: "Control Flow", link: "/guide/control-flow" },
+            { text: "Functions and Scope", link: "/guide/functions-and-scope" },
+            { text: "Runtime Behavior and Errors", link: "/guide/runtime-and-errors" },
             { text: "Examples", link: "/guide/examples" },
           ],
         },

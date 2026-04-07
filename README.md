@@ -104,7 +104,15 @@ git clone https://github.com/V8V88V8V88/XE.git
 cd XE
 cargo build --release
 ```
-The compiler binary will be created in Cargo's release output directory. If you install it into your `PATH`, invoke it as `xe`.
+The compiler binary will be created in Cargo's release output directory.
+
+To install that built binary into `~/.local/bin`, run:
+
+```bash
+./target/release/xe install
+```
+
+If `~/.local/bin` is not already in your `PATH`, add it before using `xe` directly.
 
 *Note: For macOS users, follow the same steps above to build a native binary for Apple Silicon or Intel Macs.*
 

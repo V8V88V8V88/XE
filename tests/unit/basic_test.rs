@@ -635,3 +635,40 @@ fn test_compile_rejects_unknown_extra_arguments() {
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("Invalid compile arguments"));
 }
+
+#[test]
+fn test_install_command_copies_executable() {
+    let id = get_unique_id();
+    let temp_dir = std::env::temp_dir().join(format!("xe_install_test_{}", id));
+    let install_dir = temp_dir.join("bin");
+
+    let install_output = Command::new(env!("CARGO_BIN_EXE_xe"))
+        .arg("install")
+        .arg("--to")
+        .arg(&install_dir)
+        .output()
+        .expect("install command should run");
+
+    assert!(install_output.status.success());
+    let install_stderr = String::from_utf8_lossy(&install_output.stderr);
+    assert!(install_stderr.contains("Installed XE to"));
+
+    let installed_binary = if cfg!(windows) {
+        install_dir.join("xe.exe")
+    } else {
+        install_dir.join("xe")
+    };
+
+    assert!(installed_binary.exists());
+
+    let help_output = Command::new(&installed_binary)
+        .arg("help")
+        .output()
+        .expect("installed xe should run");
+
+    assert!(help_output.status.success());
+    let stderr = String::from_utf8_lossy(&help_output.stderr);
+    assert!(stderr.contains("XE Programming Language Compiler"));
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}

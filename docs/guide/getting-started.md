@@ -41,7 +41,31 @@ cd XE
 cargo build --release
 ```
 
-The compiler binary will be available in Cargo's release output directory. Once it is installed into your `PATH`, invoke it as `xe`.
+The compiler binary will be available in Cargo's release output directory.
+
+Install that built binary into `~/.local/bin`:
+
+```bash
+./target/release/xe install
+```
+
+If you want to build and install in one step from the repository checkout:
+
+```bash
+cargo run --release -- install
+```
+
+If `xe` is still not found after installation, add the install directory to your shell `PATH`.
+
+Examples:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+```fish
+set -Ux fish_user_paths $HOME/.local/bin $fish_user_paths
+```
 
 ## Install through Cargo
 

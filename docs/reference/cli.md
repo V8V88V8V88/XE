@@ -5,6 +5,7 @@
 ```text
 xe compile <file.xe>
 xe compile <file.xe> -o <output>
+xe install [--to <directory>]
 xe run <file.xe>
 xe help
 ```
@@ -21,6 +22,13 @@ xe help
 - Compiles the XE file
 - Builds a temporary executable with `rustc`
 - Runs the program immediately
+
+## `install`
+
+- Copies the current XE binary into a local bin directory
+- Default install target is `~/.local/bin`
+- `--to <directory>` lets you choose a custom install directory
+- After installation, that directory must be in your shell `PATH` to run `xe` directly
 
 ## `help`
 

@@ -8,6 +8,9 @@ mod semantic;
 use std::env;
 use std::fs;
 use std::io::{self, Write};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
 use codegen::CodeGenerator;
@@ -42,6 +45,7 @@ fn print_usage() {
     eprintln!("Usage:");
     eprintln!("  xe compile <file.xe>           Compile and print generated Rust code");
     eprintln!("  xe compile <file.xe> -o <out>  Compile and build a native executable");
+    eprintln!("  xe install [--to <dir>]        Install the current XE binary into a local bin directory");
     eprintln!("  xe run <file.xe>               Compile and run the program");
     eprintln!("  xe help                        Show this help message");
 }
@@ -64,6 +68,106 @@ fn clean_temp_dir(path: &std::path::Path) {
     let _ = fs::remove_dir_all(path);
 }
 
+fn default_install_dir() -> Result<PathBuf, String> {
+    if let Ok(home) = env::var("HOME") {
+        return Ok(PathBuf::from(home).join(".local").join("bin"));
+    }
+
+    #[cfg(windows)]
+    if let Ok(profile) = env::var("USERPROFILE") {
+        return Ok(PathBuf::from(profile).join(".local").join("bin"));
+    }
+
+    Err("could not determine the home directory for installation".to_string())
+}
+
+fn resolve_install_source() -> Result<PathBuf, String> {
+    let current_exe = env::current_exe()
+        .map_err(|e| format!("failed to determine current executable path: {}", e))?;
+
+    let executable_name = if cfg!(windows) { "xe.exe" } else { "xe" };
+
+    if current_exe
+        .components()
+        .any(|component| component.as_os_str() == "debug")
+    {
+        if let Some(debug_dir) = current_exe.parent() {
+            if let Some(target_dir) = debug_dir.parent() {
+                let release_candidate = target_dir.join("release").join(executable_name);
+                if release_candidate.exists() {
+                    return Ok(release_candidate);
+                }
+            }
+        }
+    }
+
+    Ok(current_exe)
+}
+
+fn install_binary(args: &[String]) {
+    let install_dir = match args {
+        [] => match default_install_dir() {
+            Ok(dir) => dir,
+            Err(message) => {
+                eprintln!("Error: {}", message);
+                std::process::exit(1);
+            }
+        },
+        [flag, dir] if flag == "--to" => PathBuf::from(dir),
+        _ => {
+            eprintln!("Error: Invalid install arguments");
+            eprintln!("Usage: xe install [--to <directory>]");
+            std::process::exit(1);
+        }
+    };
+
+    let source = match resolve_install_source() {
+        Ok(path) => path,
+        Err(message) => {
+            eprintln!("Error: {}", message);
+            std::process::exit(1);
+        }
+    };
+
+    if let Err(e) = fs::create_dir_all(&install_dir) {
+        eprintln!(
+            "Error: Failed to create install directory '{}': {}",
+            install_dir.display(),
+            e
+        );
+        std::process::exit(1);
+    }
+
+    let target_name = if cfg!(windows) { "xe.exe" } else { "xe" };
+    let target = install_dir.join(target_name);
+
+    if let Err(e) = fs::copy(&source, &target) {
+        eprintln!(
+            "Error: Failed to install '{}' to '{}': {}",
+            source.display(),
+            target.display(),
+            e
+        );
+        std::process::exit(1);
+    }
+
+    #[cfg(unix)]
+    if let Err(e) = fs::set_permissions(&target, fs::Permissions::from_mode(0o755)) {
+        eprintln!(
+            "Error: Installed binary at '{}' but could not update permissions: {}",
+            target.display(),
+            e
+        );
+        std::process::exit(1);
+    }
+
+    eprintln!("Installed XE to {}", target.display());
+    eprintln!(
+        "Add '{}' to your PATH if it is not already available in new shells.",
+        install_dir.display()
+    );
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
@@ -75,6 +179,9 @@ fn main() {
     match args[1].as_str() {
         "help" | "--help" | "-h" => {
             print_usage();
+        }
+        "install" => {
+            install_binary(&args[2..]);
         }
         "compile" => {
             if args.len() < 3 {

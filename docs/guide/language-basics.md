@@ -2,6 +2,14 @@
 
 XE is intentionally small. The syntax is indentation-based and close to Python in shape, but the compiler lowers everything into Rust.
 
+If you want the book-like path through the docs, read the chapters in this order:
+
+1. [Syntax and Blocks](/guide/syntax-and-blocks)
+2. [Types and Values](/guide/types-and-values)
+3. [Control Flow](/guide/control-flow)
+4. [Functions and Scope](/guide/functions-and-scope)
+5. [Runtime Behavior and Errors](/guide/runtime-and-errors)
+
 ## Hello World
 
 Every language starts with printing a message.
@@ -248,3 +256,11 @@ Current built-ins:
 - Loop control: `break`, `continue`
 - Functions: `function name(args):` and `return`
 - Blocks: indentation with spaces, not braces
+
+For the more detailed version of each topic, continue with:
+
+- [Syntax and Blocks](/guide/syntax-and-blocks)
+- [Types and Values](/guide/types-and-values)
+- [Control Flow](/guide/control-flow)
+- [Functions and Scope](/guide/functions-and-scope)
+- [Runtime Behavior and Errors](/guide/runtime-and-errors)
