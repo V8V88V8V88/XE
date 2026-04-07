@@ -41,7 +41,7 @@ cd XE
 cargo build --release
 ```
 
-The compiler binary will be available at `./target/release/xe` on Linux and macOS, or `xe.exe` on Windows.
+The compiler binary will be available in Cargo's release output directory. Once it is installed into your `PATH`, invoke it as `xe`.
 
 ## Install through Cargo
 
@@ -62,13 +62,13 @@ print("Hello, World!")
 Run it:
 
 ```bash
-./target/release/xe run hello.xe
+xe run hello.xe
 ```
 
 ## Compile a standalone executable
 
 ```bash
-./target/release/xe compile examples/hello.xe -o hello
+xe compile examples/hello.xe -o hello
 ./hello
 ```
 
@@ -77,13 +77,13 @@ Run it:
 If you want to inspect the code XE generates:
 
 ```bash
-./target/release/xe compile examples/hello.xe
+xe compile examples/hello.xe
 ```
 
 If you use `-o`, XE will build a native executable instead of saving the Rust source:
 
 ```bash
-./target/release/xe compile examples/hello.xe -o hello
+xe compile examples/hello.xe -o hello
 ```
 
 ## Docs development

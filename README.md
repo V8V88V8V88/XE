@@ -104,7 +104,7 @@ git clone https://github.com/V8V88V8V88/XE.git
 cd XE
 cargo build --release
 ```
-The compiler binary will be created at `./target/release/xe` (or `xe.exe` on Windows).
+The compiler binary will be created in Cargo's release output directory. If you install it into your `PATH`, invoke it as `xe`.
 
 *Note: For macOS users, follow the same steps above to build a native binary for Apple Silicon or Intel Macs.*
 
@@ -115,20 +115,20 @@ The compiler binary will be created at `./target/release/xe` (or `xe.exe` on Win
 ### Run an XE program
 Compiles and executes the program in one step.
 ```bash
-./target/release/xe run examples/hello.xe
+xe run examples/hello.xe
 ```
 
 ### Compile to a Native Binary
 Produces a standalone executable.
 ```bash
-./target/release/xe compile examples/hello.xe -o hello
+xe compile examples/hello.xe -o hello
 ./hello
 ```
 
 ### Print the Generated Rust
 Emits the Rust source XE generates to standard output.
 ```bash
-./target/release/xe compile examples/hello.xe
+xe compile examples/hello.xe
 ```
 
 ---
