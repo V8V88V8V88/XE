@@ -2,8 +2,8 @@
 layout: home
 
 hero:
-  name: XE Docs
-  text: Documentation for the XE language and compiler.
+  name: XE lang
+  text: Official website of the XE language and compiler.
   tagline: XE uses indentation-based syntax, compiles to Rust, and produces native executables through rustc.
   image:
     src: /XElogo.png
