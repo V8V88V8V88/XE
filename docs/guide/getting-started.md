@@ -1,14 +1,37 @@
 # Getting Started
 
+XE can be installed either from a published release binary or by building from source.
+
+## Quick install {#quick-install}
+
+The fastest path on macOS and Linux is the hosted install script:
+
+```bash
+curl -fsSL https://xe-lang.vercel.app/install.sh | bash
+```
+
+This downloads the latest XE binary from GitHub Releases and installs it into `~/.local/bin` by default.
+
+Useful variants:
+
+```bash
+XE_INSTALL_DIR="$HOME/bin" curl -fsSL https://xe-lang.vercel.app/install.sh | bash
+XE_VERSION="v0.1.0" curl -fsSL https://xe-lang.vercel.app/install.sh | bash
+```
+
+If you are on Windows, use the release zip from GitHub Releases for now.
+
+## Build from source
+
 XE depends on the Rust toolchain because the compiler emits Rust and uses `rustc` for final builds.
 
-## Requirements
+Requirements:
 
 - `cargo`
 - `rustc`
 - `git` if you are cloning the repository
 
-## Build the compiler
+Build the compiler:
 
 ```bash
 git clone https://github.com/V8V88V8V88/XE.git
@@ -17,6 +40,14 @@ cargo build --release
 ```
 
 The compiler binary will be available at `./target/release/xe` on Linux and macOS, or `xe.exe` on Windows.
+
+## Install through Cargo
+
+If you prefer to install from the repository through Cargo:
+
+```bash
+cargo install --git https://github.com/V8V88V8V88/XE --bin xe
+```
 
 ## Run your first XE file
 

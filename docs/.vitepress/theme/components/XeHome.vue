@@ -2,13 +2,14 @@
   <div class="xe-home">
     <section id="install" class="xe-install-bar xe-reveal">
       <p class="xe-install-kicker">Install</p>
-      <p class="xe-install-title">The cleanest install path today is through Cargo.</p>
+      <p class="xe-install-title">Install the latest XE release binary in one command.</p>
       <div class="xe-command">
-        <code>cargo install --git https://github.com/V8V88V8V88/XE --bin xe</code>
+        <code>curl -fsSL https://xe-lang.vercel.app/install.sh | bash</code>
       </div>
       <p class="xe-install-note">
-        Requires the Rust toolchain. If you want to study or modify the compiler, use the
-        build-from-source guide instead.
+        macOS and Linux are supported by the installer today. Windows users can download the zip
+        from GitHub Releases, and source builds remain available if you want to study or modify the
+        compiler.
       </p>
     </section>
 

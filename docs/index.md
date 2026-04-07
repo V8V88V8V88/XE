@@ -11,7 +11,7 @@ hero:
   actions:
     - theme: brand
       text: Install XE
-      link: "#install"
+      link: /guide/getting-started#quick-install
     - theme: alt
       text: Quick Start
       link: /guide/getting-started
