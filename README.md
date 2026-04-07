@@ -67,7 +67,7 @@ graph LR
 1. **Lexer** – Splits your source code into tokens (words, numbers, symbols).
 2. **Parser** – Checks that the tokens form valid sentences (syntax) and builds a tree (AST).
 3. **AST (Abstract Syntax Tree)** – A tree that represents the structure of your program.
-4. **Semantic validation** – Checks that the program makes sense (e.g. variables used correctly, types okay).
+4. **Semantic validation** – Checks names, function calls, loop control, and other structural rules.
 5. **Rust code generator** – Writes safe Rust code that does what your XE program says.
 6. **Rust compiler (rustc)** – Compiles that Rust code into an executable.
 
@@ -87,11 +87,11 @@ You can run the docs locally:
 
 ```bash
 cd docs
-bun install
-bun run docs:dev
+npm install
+npm run docs:dev
 ```
 
-*(You can also build the docs using `bun run docs:build`.)*
+*(You can also build the docs using `npm run docs:build`.)*
 
 ---
 
@@ -127,6 +127,12 @@ Produces a standalone executable.
 ./hello
 ```
 
+### Print the Generated Rust
+Emits the Rust source XE generates to standard output.
+```bash
+./target/release/xe compile examples/hello.xe
+```
+
 ---
 
 ## Performance Comparison
@@ -153,10 +159,15 @@ XE is designed for native execution. In a recursive Fibonacci benchmark (`fib(35
 - **Boolean** – True and false.
 - **List** – An ordered list of values.
 
+XE is currently **dynamically typed**. Values are represented at runtime and operations use XE's coercion rules instead of static type declarations.
+
 **Control flow**
 
-- `if` / `else` – Branch on a condition.
+- `if` / `elif` / `else` – Branch on a condition.
 - `repeat N times` – Loop a fixed number of times.
+- `while` – Loop while a condition stays true.
+- `for item in iterable` – Iterate over lists and text.
+- `break` / `continue` – Control loop execution.
 
 **Functions**
 
@@ -173,6 +184,7 @@ function greet(name):
 - `input()` – Read input from the user.
 - `length()` – Length of text or a list.
 - `type()` – Get the type of a value.
+- `convert()` – Convert between `number`, `text`, and `boolean`.
 
 ---
 
@@ -199,6 +211,8 @@ age = input("Enter age:")
 age = convert(age, "number")
 if age >= 18:
     print("Adult")
+elif age >= 13:
+    print("Teen")
 else:
     print("Minor")
 ```
@@ -227,7 +241,16 @@ Possible future steps: better optimizations (e.g. bytecode or IR), more built-in
 
 **Current Version:** 1.0.0-pre-alpha
 
-The XE compiler is currently in its **Pre-Alpha** stage. While the core pipeline (Lexer → Parser → Semantic → CodeGen) is 100% functional and verified by tests, it is considered a research prototype.
+The XE compiler is currently in its **Pre-Alpha** stage. The core pipeline works and is covered by integration tests, but the project is still a research prototype.
+
+Recent milestone work completed:
+
+- fixed assignment semantics for reassignment across nested blocks
+- added `elif`, `while`, `for`, `break`, and `continue`
+- replaced silent runtime fallbacks with explicit runtime errors
+- improved compiler errors with source snippets and carets
+- added GitHub Actions CI
+- expanded integration tests and aligned the docs/CLI with the current implementation
 
 ---
 

@@ -39,6 +39,8 @@ pub enum XeErrorKind {
     WrongArgumentCount { name: String, expected: usize, got: usize },
     TypeMismatch { expected: String, got: String },
     CannotRedefineBuiltin(String),
+    BreakOutsideLoop,
+    ContinueOutsideLoop,
 
     // General
     IoError(String),
@@ -79,7 +81,30 @@ impl XeError {
             XeErrorKind::CannotRedefineBuiltin(name) => {
                 format!("cannot redefine built-in function '{}'", name)
             }
+            XeErrorKind::BreakOutsideLoop => "break can only be used inside a loop".to_string(),
+            XeErrorKind::ContinueOutsideLoop => {
+                "continue can only be used inside a loop".to_string()
+            }
             XeErrorKind::IoError(msg) => format!("I/O error: {}", msg),
+        }
+    }
+
+    pub fn render_with_source(&self, source: &str) -> String {
+        match &self.span {
+            Some(span) => {
+                let line_text = source
+                    .lines()
+                    .nth(span.line.saturating_sub(1))
+                    .unwrap_or_default();
+                let caret_column = span.column.saturating_sub(1);
+                let caret_padding = " ".repeat(caret_column);
+
+                format!(
+                    "Error at {}: {}\n{}\n{}^",
+                    span, self.message, line_text, caret_padding
+                )
+            }
+            None => self.to_string(),
         }
     }
 }

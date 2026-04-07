@@ -47,6 +47,12 @@ If you want to inspect the code XE generates:
 ./target/release/xe compile examples/hello.xe
 ```
 
+If you use `-o`, XE will build a native executable instead of saving the Rust source:
+
+```bash
+./target/release/xe compile examples/hello.xe -o hello
+```
+
 ## Docs development
 
 This docs site is its own small app inside `docs/`:

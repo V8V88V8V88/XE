@@ -12,13 +12,19 @@ pub enum TokenKind {
     Identifier(String),
     If,
     Else,
+    Elif,
     Function,
+    While,
+    For,
+    In,
     Repeat,
     Times,
     And,
     Or,
     Not,
     Return,
+    Break,
+    Continue,
 
     // Operators
     Plus,
@@ -291,7 +297,11 @@ impl Lexer {
         let kind = match ident.as_str() {
             "if" => TokenKind::If,
             "else" => TokenKind::Else,
+            "elif" => TokenKind::Elif,
             "function" => TokenKind::Function,
+            "while" => TokenKind::While,
+            "for" => TokenKind::For,
+            "in" => TokenKind::In,
             "repeat" => TokenKind::Repeat,
             "times" => TokenKind::Times,
             "and" => TokenKind::And,
@@ -300,6 +310,8 @@ impl Lexer {
             "true" => TokenKind::True,
             "false" => TokenKind::False,
             "return" => TokenKind::Return,
+            "break" => TokenKind::Break,
+            "continue" => TokenKind::Continue,
             _ => TokenKind::Identifier(ident),
         };
 

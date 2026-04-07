@@ -1,0 +1,9 @@
+# if/elif/else branching. Picks a grade band based on the score.
+score = 82
+
+if score >= 90:
+    print("A")
+elif score >= 80:
+    print("B")
+else:
+    print("Keep going")

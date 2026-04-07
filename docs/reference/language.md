@@ -9,6 +9,10 @@
 | `boolean` | `true`, `false` | Condition values |
 | `list` | `[1, 2, 3]` | Ordered values with zero-based indexing |
 
+XE is currently dynamically typed. Variables do not carry declared static types, and values use runtime coercions where the language allows them.
+
+Invalid operations now fail with explicit runtime errors instead of silently producing fallback values.
+
 ## Operators
 
 ### Arithmetic
@@ -53,8 +57,18 @@ Valid `convert` targets:
 ## Control flow
 
 - `if`
+- `elif`
 - `else`
 - `repeat N times`
+- `while`
+- `for name in iterable`
+- `break`
+- `continue`
+
+`for` loops currently iterate over:
+
+- lists
+- text values, one character at a time
 
 ## Function syntax
 
@@ -67,4 +81,15 @@ function name(arg1, arg2):
 
 - XE uses indentation-based blocks
 - spaces are the expected style for indentation
-- there are no braces for `if`, `else`, `repeat`, or `function` blocks
+- there are no braces for `if`, `elif`, `else`, `repeat`, `while`, `for`, or `function` blocks
+
+## Assignment semantics
+
+- `name = value` creates a variable if that name does not exist in any enclosing scope
+- otherwise, it reassigns the nearest existing variable instead of creating a shadow copy
+- names first created inside a block stay local to that block
+
+## Error behavior
+
+- compiler errors include line/column information, the source line, and a caret marker
+- invalid runtime operations stop the program with a `Runtime error: ...` message

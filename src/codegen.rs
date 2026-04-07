@@ -1,8 +1,11 @@
+use std::collections::HashSet;
+
 use crate::ast::*;
 
 pub struct CodeGenerator {
     output: String,
     indent_level: usize,
+    scopes: Vec<HashSet<String>>,
 }
 
 impl CodeGenerator {
@@ -10,6 +13,7 @@ impl CodeGenerator {
         Self {
             output: String::new(),
             indent_level: 0,
+            scopes: vec![HashSet::new()],
         }
     }
 
@@ -89,15 +93,6 @@ impl std::fmt::Display for XeValue {
 }
 
 impl XeValue {
-    fn as_number(&self) -> f64 {
-        match self {
-            XeValue::Number(n) => *n,
-            XeValue::Text(s) => s.parse().unwrap_or(0.0),
-            XeValue::Boolean(b) => if *b { 1.0 } else { 0.0 },
-            XeValue::List(l) => l.len() as f64,
-        }
-    }
-
     fn as_bool(&self) -> bool {
         match self {
             XeValue::Number(n) => *n != 0.0,
@@ -117,6 +112,34 @@ impl XeValue {
     }
 }
 
+fn xe_runtime_error(message: &str) -> ! {
+    eprintln!("Runtime error: {}", message);
+    std::process::exit(1);
+}
+
+fn xe_expect_number(value: &XeValue, context: &str) -> f64 {
+    match value {
+        XeValue::Number(n) => *n,
+        _ => xe_runtime_error(&format!(
+            "{} expected a number, got {}",
+            context,
+            value.type_name()
+        )),
+    }
+}
+
+fn xe_expect_non_negative_integer(value: &XeValue, context: &str) -> usize {
+    let number = xe_expect_number(value, context);
+    if !number.is_finite() || number < 0.0 || number.fract() != 0.0 {
+        xe_runtime_error(&format!(
+            "{} expected a non-negative integer, got {}",
+            context,
+            number
+        ));
+    }
+    number as usize
+}
+
 fn xe_print(args: Vec<XeValue>) {
     let output: Vec<String> = args.iter().map(|a| a.to_string()).collect();
     println!("{}", output.join(" "));
@@ -134,7 +157,10 @@ fn xe_length(value: &XeValue) -> XeValue {
     match value {
         XeValue::Text(s) => XeValue::Number(s.len() as f64),
         XeValue::List(l) => XeValue::Number(l.len() as f64),
-        _ => XeValue::Number(0.0),
+        _ => xe_runtime_error(&format!(
+            "length() expected text or list, got {}",
+            value.type_name()
+        )),
     }
 }
 
@@ -145,13 +171,30 @@ fn xe_type(value: &XeValue) -> XeValue {
 fn xe_convert(value: &XeValue, target: &XeValue) -> XeValue {
     let target_type = match target {
         XeValue::Text(s) => s.as_str(),
-        _ => return value.clone(),
+        _ => xe_runtime_error(&format!(
+            "convert() target must be text, got {}",
+            target.type_name()
+        )),
     };
     match target_type {
-        "number" => XeValue::Number(value.as_number()),
+        "number" => match value {
+            XeValue::Number(n) => XeValue::Number(*n),
+            XeValue::Text(s) => match s.parse::<f64>() {
+                Ok(n) => XeValue::Number(n),
+                Err(_) => xe_runtime_error(&format!(
+                    "cannot convert text '{}' to number",
+                    s
+                )),
+            },
+            XeValue::Boolean(b) => XeValue::Number(if *b { 1.0 } else { 0.0 }),
+            XeValue::List(_) => xe_runtime_error("cannot convert list to number"),
+        },
         "text" => XeValue::Text(value.to_string()),
         "boolean" => XeValue::Boolean(value.as_bool()),
-        _ => value.clone(),
+        _ => xe_runtime_error(&format!(
+            "unsupported convert() target '{}'",
+            target_type
+        )),
     }
 }
 
@@ -164,24 +207,43 @@ fn xe_add(left: XeValue, right: XeValue) -> XeValue {
             result.extend(b.clone());
             XeValue::List(result)
         }
-        _ => XeValue::Number(left.as_number() + right.as_number()),
+        (XeValue::Number(a), XeValue::Number(b)) => XeValue::Number(a + b),
+        _ => xe_runtime_error(&format!(
+            "operator '+' is not defined for {} and {}",
+            left.type_name(),
+            right.type_name()
+        )),
     }
 }
 
 fn xe_sub(left: XeValue, right: XeValue) -> XeValue {
-    XeValue::Number(left.as_number() - right.as_number())
+    XeValue::Number(
+        xe_expect_number(&left, "operator '-'") - xe_expect_number(&right, "operator '-'"),
+    )
 }
 
 fn xe_mul(left: XeValue, right: XeValue) -> XeValue {
-    XeValue::Number(left.as_number() * right.as_number())
+    XeValue::Number(
+        xe_expect_number(&left, "operator '*'") * xe_expect_number(&right, "operator '*'"),
+    )
 }
 
 fn xe_div(left: XeValue, right: XeValue) -> XeValue {
-    XeValue::Number(left.as_number() / right.as_number())
+    let lhs = xe_expect_number(&left, "operator '/'");
+    let rhs = xe_expect_number(&right, "operator '/'");
+    if rhs == 0.0 {
+        xe_runtime_error("division by zero");
+    }
+    XeValue::Number(lhs / rhs)
 }
 
 fn xe_mod(left: XeValue, right: XeValue) -> XeValue {
-    XeValue::Number(left.as_number() % right.as_number())
+    let lhs = xe_expect_number(&left, "operator '%'");
+    let rhs = xe_expect_number(&right, "operator '%'");
+    if rhs == 0.0 {
+        xe_runtime_error("modulo by zero");
+    }
+    XeValue::Number(lhs % rhs)
 }
 
 fn xe_eq(left: &XeValue, right: &XeValue) -> bool {
@@ -194,29 +256,48 @@ fn xe_eq(left: &XeValue, right: &XeValue) -> bool {
 }
 
 fn xe_lt(left: &XeValue, right: &XeValue) -> bool {
-    left.as_number() < right.as_number()
+    xe_expect_number(left, "operator '<'") < xe_expect_number(right, "operator '<'")
 }
 
 fn xe_gt(left: &XeValue, right: &XeValue) -> bool {
-    left.as_number() > right.as_number()
+    xe_expect_number(left, "operator '>'") > xe_expect_number(right, "operator '>'")
 }
 
 fn xe_le(left: &XeValue, right: &XeValue) -> bool {
-    left.as_number() <= right.as_number()
+    xe_expect_number(left, "operator '<='") <= xe_expect_number(right, "operator '<='")
 }
 
 fn xe_ge(left: &XeValue, right: &XeValue) -> bool {
-    left.as_number() >= right.as_number()
+    xe_expect_number(left, "operator '>='") >= xe_expect_number(right, "operator '>='")
 }
 
 fn xe_index(obj: &XeValue, idx: &XeValue) -> XeValue {
-    let i = idx.as_number() as usize;
+    let i = xe_expect_non_negative_integer(idx, "index access");
     match obj {
-        XeValue::List(l) => l.get(i).cloned().unwrap_or(XeValue::Number(0.0)),
+        XeValue::List(l) => l
+            .get(i)
+            .cloned()
+            .unwrap_or_else(|| xe_runtime_error(&format!("list index {} out of bounds", i))),
         XeValue::Text(s) => {
-            s.chars().nth(i).map(|c| XeValue::Text(c.to_string())).unwrap_or(XeValue::Text(String::new()))
+            s.chars().nth(i).map(|c| XeValue::Text(c.to_string())).unwrap_or_else(|| {
+                xe_runtime_error(&format!("text index {} out of bounds", i))
+            })
         }
-        _ => XeValue::Number(0.0),
+        _ => xe_runtime_error(&format!(
+            "index access expected text or list, got {}",
+            obj.type_name()
+        )),
+    }
+}
+
+fn xe_iter(value: &XeValue) -> Vec<XeValue> {
+    match value {
+        XeValue::List(items) => items.clone(),
+        XeValue::Text(s) => s.chars().map(|c| XeValue::Text(c.to_string())).collect(),
+        _ => xe_runtime_error(&format!(
+            "for-loop iteration expected text or list, got {}",
+            value.type_name()
+        )),
     }
 }
 
@@ -228,7 +309,13 @@ fn xe_index(obj: &XeValue, idx: &XeValue) -> XeValue {
         match &stmt.kind {
             StatementKind::Assignment { name, value } => {
                 self.emit_indent();
-                self.emit(&format!("let mut {} = ", Self::sanitize_name(name)));
+                let sanitized = Self::sanitize_name(name);
+                if self.is_variable_defined(name) {
+                    self.emit(&format!("{} = ", sanitized));
+                } else {
+                    self.define_variable(name);
+                    self.emit(&format!("let mut {} = ", sanitized));
+                }
                 self.generate_expression(value);
                 self.emit(";\n");
             }
@@ -242,33 +329,79 @@ fn xe_index(obj: &XeValue, idx: &XeValue) -> XeValue {
                 self.generate_condition(condition);
                 self.emit(" {\n");
                 self.indent_level += 1;
+                self.push_scope();
                 for s in then_block {
                     self.generate_statement(s);
                 }
+                self.pop_scope();
                 self.indent_level -= 1;
                 self.emit_indent();
                 self.emit("}");
                 if let Some(else_stmts) = else_block {
                     self.emit(" else {\n");
                     self.indent_level += 1;
+                    self.push_scope();
                     for s in else_stmts {
                         self.generate_statement(s);
                     }
+                    self.pop_scope();
                     self.indent_level -= 1;
                     self.emit_indent();
                     self.emit("}");
                 }
                 self.emit("\n");
             }
-            StatementKind::Repeat { count, body } => {
+            StatementKind::While { condition, body } => {
                 self.emit_indent();
-                self.emit("for _ in 0..(");
-                self.generate_expression(count);
-                self.emit(").as_number() as usize {\n");
+                self.emit("while ");
+                self.generate_condition(condition);
+                self.emit(" {\n");
                 self.indent_level += 1;
+                self.push_scope();
                 for s in body {
                     self.generate_statement(s);
                 }
+                self.pop_scope();
+                self.indent_level -= 1;
+                self.emit_indent();
+                self.emit("}\n");
+            }
+            StatementKind::Repeat { count, body } => {
+                self.emit_indent();
+                self.emit("for _ in 0..xe_expect_non_negative_integer(&");
+                self.generate_expression(count);
+                self.emit(", \"repeat loop count\") {\n");
+                self.indent_level += 1;
+                self.push_scope();
+                for s in body {
+                    self.generate_statement(s);
+                }
+                self.pop_scope();
+                self.indent_level -= 1;
+                self.emit_indent();
+                self.emit("}\n");
+            }
+            StatementKind::For {
+                variable,
+                iterable,
+                body,
+            } => {
+                self.emit_indent();
+                self.emit("for __xe_loop_value in xe_iter(&");
+                self.generate_expression(iterable);
+                self.emit(") {\n");
+                self.indent_level += 1;
+                self.push_scope();
+                self.define_variable(variable);
+                self.emit_indent();
+                self.emit(&format!(
+                    "let mut {} = __xe_loop_value;\n",
+                    Self::sanitize_name(variable)
+                ));
+                for s in body {
+                    self.generate_statement(s);
+                }
+                self.pop_scope();
                 self.indent_level -= 1;
                 self.emit_indent();
                 self.emit("}\n");
@@ -279,19 +412,14 @@ fn xe_index(obj: &XeValue, idx: &XeValue) -> XeValue {
                     Self::sanitize_name(name),
                     params
                         .iter()
-                        .map(|p| format!("{}: XeValue", Self::sanitize_name(p)))
+                        .map(|p| format!("mut {}: XeValue", Self::sanitize_name(p)))
                         .collect::<Vec<_>>()
                         .join(", ")
                 ));
                 self.indent_level += 1;
-
+                self.push_scope();
                 for param in params {
-                    self.emit_indent();
-                    self.emit(&format!(
-                        "let mut {} = {};\n",
-                        Self::sanitize_name(param),
-                        Self::sanitize_name(param)
-                    ));
+                    self.define_variable(param);
                 }
 
                 for s in body {
@@ -307,6 +435,7 @@ fn xe_index(obj: &XeValue, idx: &XeValue) -> XeValue {
                     self.emit("XeValue::Number(0.0)\n");
                 }
 
+                self.pop_scope();
                 self.indent_level -= 1;
                 self.emit("}\n");
             }
@@ -319,6 +448,14 @@ fn xe_index(obj: &XeValue, idx: &XeValue) -> XeValue {
                     self.emit("XeValue::Number(0.0)");
                 }
                 self.emit(";\n");
+            }
+            StatementKind::Break => {
+                self.emit_indent();
+                self.emit("break;\n");
+            }
+            StatementKind::Continue => {
+                self.emit_indent();
+                self.emit("continue;\n");
             }
             StatementKind::Expression(expr) => {
                 self.emit_indent();
@@ -531,9 +668,10 @@ fn xe_index(obj: &XeValue, idx: &XeValue) -> XeValue {
             }
             ExpressionKind::UnaryOp { op, operand } => match op {
                 UnaryOperator::Negate => {
-                    self.emit("XeValue::Number(-(");
+                self.emit("XeValue::Number(-(");
+                    self.emit("xe_expect_number(&");
                     self.generate_expression(operand);
-                    self.emit(").as_number())");
+                    self.emit(", \"unary '-'\"))");
                 }
                 UnaryOperator::Not => {
                     self.emit("XeValue::Boolean(!(");
@@ -610,6 +748,24 @@ fn xe_index(obj: &XeValue, idx: &XeValue) -> XeValue {
         for _ in 0..self.indent_level {
             self.output.push_str("    ");
         }
+    }
+
+    fn push_scope(&mut self) {
+        self.scopes.push(HashSet::new());
+    }
+
+    fn pop_scope(&mut self) {
+        self.scopes.pop();
+    }
+
+    fn define_variable(&mut self, name: &str) {
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.insert(name.to_string());
+        }
+    }
+
+    fn is_variable_defined(&self, name: &str) -> bool {
+        self.scopes.iter().rev().any(|scope| scope.contains(name))
     }
 
     fn sanitize_name(name: &str) -> String {

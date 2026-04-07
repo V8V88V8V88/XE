@@ -52,6 +52,46 @@ fn run_xe(source: &str) -> Result<String, String> {
     }
 }
 
+fn compile_and_run_binary(source: &str) -> Result<String, String> {
+    let id = get_unique_id();
+    let temp_dir = std::env::temp_dir().join(format!("xe_compile_test_{}", id));
+    let _ = fs::create_dir_all(&temp_dir);
+
+    let xe_file = temp_dir.join("input.xe");
+    fs::write(&xe_file, source).map_err(|e| e.to_string())?;
+
+    let binary_path = if cfg!(windows) {
+        temp_dir.join("program.exe")
+    } else {
+        temp_dir.join("program")
+    };
+
+    let compile_output = Command::new(env!("CARGO_BIN_EXE_xe"))
+        .arg("compile")
+        .arg(&xe_file)
+        .arg("-o")
+        .arg(&binary_path)
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if !compile_output.status.success() {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return Err(String::from_utf8_lossy(&compile_output.stderr).to_string());
+    }
+
+    let run_output = Command::new(&binary_path)
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    if run_output.status.success() {
+        Ok(String::from_utf8_lossy(&run_output.stdout).to_string())
+    } else {
+        Err(String::from_utf8_lossy(&run_output.stderr).to_string())
+    }
+}
+
 #[test]
 fn test_hello_world() {
     let output = run_xe(r#"print("Hello, World!")"#).unwrap();
@@ -120,6 +160,17 @@ repeat 3 times:
 }
 
 #[test]
+fn test_repeat_loop_can_reassign_outer_variable() {
+    let output = run_xe(r#"
+count = 0
+repeat 5 times:
+    count = count + 1
+print(count)
+"#).unwrap();
+    assert_eq!(output.trim(), "5");
+}
+
+#[test]
 fn test_function_definition() {
     let output = run_xe(r#"
 function double(n):
@@ -128,6 +179,124 @@ function double(n):
 print(double(21))
 "#).unwrap();
     assert_eq!(output.trim(), "42");
+}
+
+#[test]
+fn test_assignment_in_if_updates_outer_scope() {
+    let output = run_xe(r#"
+x = 1
+if true:
+    x = 2
+print(x)
+"#).unwrap();
+    assert_eq!(output.trim(), "2");
+}
+
+#[test]
+fn test_elif_chain() {
+    let output = run_xe(r#"
+score = 82
+
+if score >= 90:
+    print("A")
+elif score >= 80:
+    print("B")
+elif score >= 70:
+    print("C")
+else:
+    print("D")
+"#).unwrap();
+    assert_eq!(output.trim(), "B");
+}
+
+#[test]
+fn test_while_loop() {
+    let output = run_xe(r#"
+count = 0
+total = 0
+
+while count < 5:
+    total = total + count
+    count = count + 1
+
+print(total)
+"#).unwrap();
+    assert_eq!(output.trim(), "10");
+}
+
+#[test]
+fn test_for_loop_over_list() {
+    let output = run_xe(r#"
+total = 0
+
+for item in [1, 2, 3, 4]:
+    total = total + item
+
+print(total)
+"#).unwrap();
+    assert_eq!(output.trim(), "10");
+}
+
+#[test]
+fn test_for_loop_over_text() {
+    let output = run_xe(r#"
+result = ""
+
+for ch in "XE":
+    result = result + ch
+
+print(result)
+"#).unwrap();
+    assert_eq!(output.trim(), "XE");
+}
+
+#[test]
+fn test_break_in_while_loop() {
+    let output = run_xe(r#"
+count = 0
+
+while true:
+    count = count + 1
+    if count == 3:
+        break
+
+print(count)
+"#).unwrap();
+    assert_eq!(output.trim(), "3");
+}
+
+#[test]
+fn test_continue_in_while_loop() {
+    let output = run_xe(r#"
+count = 0
+total = 0
+
+while count < 5:
+    count = count + 1
+    if count == 3:
+        continue
+    total = total + count
+
+print(total)
+"#).unwrap();
+    assert_eq!(output.trim(), "12");
+}
+
+#[test]
+fn test_break_and_continue_in_for_loop() {
+    let output = run_xe(r#"
+result = ""
+
+for ch in "ABCDE":
+    if ch == "B":
+        continue
+    if ch == "D":
+        break
+    result = result + ch
+
+print(result)
+"#).unwrap();
+    assert_eq!(output.trim(), "AC");
 }
 
 #[test]
@@ -190,4 +359,140 @@ fn test_undefined_function_error() {
     let result = run_xe("unknown_func()");
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("undefined function"));
+}
+
+#[test]
+fn test_loop_variable_scope_is_local() {
+    let result = run_xe(r#"
+for item in [1, 2]:
+    print(item)
+
+print(item)
+"#);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("undefined variable"));
+}
+
+#[test]
+fn test_if_block_variable_scope_is_local() {
+    let result = run_xe(r#"
+if true:
+    inner = 42
+
+print(inner)
+"#);
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("undefined variable"));
+}
+
+#[test]
+fn test_break_outside_loop_error() {
+    let result = run_xe("break");
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("break can only be used inside a loop"));
+}
+
+#[test]
+fn test_continue_outside_loop_error() {
+    let result = run_xe("continue");
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("continue can only be used inside a loop"));
+}
+
+#[test]
+fn test_compile_o_produces_runnable_binary() {
+    let output = compile_and_run_binary(r#"
+value = 40
+value = value + 2
+print(value)
+"#).unwrap();
+    assert_eq!(output.trim(), "42");
+}
+
+#[test]
+fn test_compile_without_o_prints_rust_code() {
+    let rust_code = compile_xe(r#"print("Hello")"#).unwrap();
+    assert!(rust_code.contains("fn main()"));
+    assert!(rust_code.contains("xe_print"));
+}
+
+#[test]
+fn test_runtime_error_for_invalid_number_conversion() {
+    let result = run_xe(r#"print(convert("abc", "number"))"#);
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .contains("Runtime error: cannot convert text 'abc' to number"));
+}
+
+#[test]
+fn test_runtime_error_for_invalid_length_argument() {
+    let result = run_xe("print(length(true))");
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .contains("Runtime error: length() expected text or list, got boolean"));
+}
+
+#[test]
+fn test_runtime_error_for_division_by_zero() {
+    let result = run_xe("print(10 / 0)");
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("Runtime error: division by zero"));
+}
+
+#[test]
+fn test_runtime_error_for_invalid_repeat_count() {
+    let result = run_xe(r#"
+repeat 2.5 times:
+    print("hi")
+"#);
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .contains("Runtime error: repeat loop count expected a non-negative integer"));
+}
+
+#[test]
+fn test_runtime_error_for_out_of_bounds_index() {
+    let result = run_xe(r#"
+items = [1, 2]
+print(items[5])
+"#);
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .contains("Runtime error: list index 5 out of bounds"));
+}
+
+#[test]
+fn test_runtime_error_for_invalid_for_iteration() {
+    let result = run_xe(r#"
+for item in 42:
+    print(item)
+"#);
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .contains("Runtime error: for-loop iteration expected text or list, got number"));
+}
+
+#[test]
+fn test_runtime_error_for_invalid_arithmetic_types() {
+    let result = run_xe(r#"print([1, 2] - 1)"#);
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .contains("Runtime error: operator '-' expected a number, got list"));
+}
+
+#[test]
+fn test_compile_error_shows_source_snippet_and_caret() {
+    let result = run_xe(r#"
+print(missing_name)
+"#);
+    let error = result.unwrap_err();
+    assert!(error.contains("undefined variable 'missing_name'"));
+    assert!(error.contains("print(missing_name)"));
+    assert!(error.contains("^"));
 }

@@ -39,14 +39,42 @@ impl Parser {
             return self.parse_if_statement();
         }
 
+        // While loop
+        if self.check(&TokenKind::While) {
+            return self.parse_while_statement();
+        }
+
         // Repeat loop
         if self.check(&TokenKind::Repeat) {
             return self.parse_repeat_statement();
         }
 
+        // For loop
+        if self.check(&TokenKind::For) {
+            return self.parse_for_statement();
+        }
+
         // Return statement
         if self.check(&TokenKind::Return) {
             return self.parse_return_statement();
+        }
+
+        if self.check(&TokenKind::Break) {
+            self.advance();
+            self.expect_statement_end()?;
+            return Ok(Statement {
+                kind: StatementKind::Break,
+                span,
+            });
+        }
+
+        if self.check(&TokenKind::Continue) {
+            self.advance();
+            self.expect_statement_end()?;
+            return Ok(Statement {
+                kind: StatementKind::Continue,
+                span,
+            });
         }
 
         // Assignment or expression
@@ -100,8 +128,12 @@ impl Parser {
     }
 
     fn parse_if_statement(&mut self) -> XeResult<Statement> {
+        self.parse_if_like_statement(TokenKind::If)
+    }
+
+    fn parse_if_like_statement(&mut self, keyword: TokenKind) -> XeResult<Statement> {
         let span = self.current_span();
-        self.advance(); // consume 'if'
+        self.expect(&keyword)?;
 
         let condition = self.parse_expression()?;
         self.expect(&TokenKind::Colon)?;
@@ -109,7 +141,10 @@ impl Parser {
 
         let then_block = self.parse_block()?;
 
-        let else_block = if self.check(&TokenKind::Else) {
+        let else_block = if self.check(&TokenKind::Elif) {
+            let elif_stmt = self.parse_if_like_statement(TokenKind::Elif)?;
+            Some(vec![elif_stmt])
+        } else if self.check(&TokenKind::Else) {
             self.advance(); // consume 'else'
             self.expect(&TokenKind::Colon)?;
             self.expect_newline()?;
@@ -128,6 +163,22 @@ impl Parser {
         })
     }
 
+    fn parse_while_statement(&mut self) -> XeResult<Statement> {
+        let span = self.current_span();
+        self.advance(); // consume 'while'
+
+        let condition = self.parse_expression()?;
+        self.expect(&TokenKind::Colon)?;
+        self.expect_newline()?;
+
+        let body = self.parse_block()?;
+
+        Ok(Statement {
+            kind: StatementKind::While { condition, body },
+            span,
+        })
+    }
+
     fn parse_repeat_statement(&mut self) -> XeResult<Statement> {
         let span = self.current_span();
         self.advance(); // consume 'repeat'
@@ -141,6 +192,28 @@ impl Parser {
 
         Ok(Statement {
             kind: StatementKind::Repeat { count, body },
+            span,
+        })
+    }
+
+    fn parse_for_statement(&mut self) -> XeResult<Statement> {
+        let span = self.current_span();
+        self.advance(); // consume 'for'
+
+        let variable = self.expect_identifier()?;
+        self.expect(&TokenKind::In)?;
+        let iterable = self.parse_expression()?;
+        self.expect(&TokenKind::Colon)?;
+        self.expect_newline()?;
+
+        let body = self.parse_block()?;
+
+        Ok(Statement {
+            kind: StatementKind::For {
+                variable,
+                iterable,
+                body,
+            },
             span,
         })
     }

@@ -40,8 +40,8 @@ fn print_usage() {
     eprintln!("XE Programming Language Compiler");
     eprintln!();
     eprintln!("Usage:");
-    eprintln!("  xe compile <file.xe>           Compile and print Rust code to stdout");
-    eprintln!("  xe compile <file.xe> -o <out>  Compile and write Rust code to file");
+    eprintln!("  xe compile <file.xe>           Compile and print generated Rust code");
+    eprintln!("  xe compile <file.xe> -o <out>  Compile and build a native executable");
     eprintln!("  xe run <file.xe>               Compile and run the program");
     eprintln!("  xe help                        Show this help message");
 }
@@ -54,6 +54,10 @@ fn read_source(path: &str) -> String {
             std::process::exit(1);
         }
     }
+}
+
+fn print_compile_error(source: &str, error: &XeError) {
+    eprintln!("{}", error.render_with_source(source));
 }
 
 fn main() {
@@ -92,7 +96,7 @@ fn main() {
                         }
 
                         // Call rustc to create the final binary
-                        let status = Command::new("rustc")
+                        let rustc_output = Command::new("rustc")
                             .arg(&temp_rs)
                             .arg("-o")
                             .arg(output_file)
@@ -100,17 +104,19 @@ fn main() {
                             .arg("opt-level=3")
                             .arg("--edition")
                             .arg("2021")
-                            .status();
+                            .stderr(Stdio::piped())
+                            .output();
 
                         // Clean up the temporary .rs file
                         let _ = fs::remove_file(&temp_rs);
 
-                        match status {
-                            Ok(s) if s.success() => {
+                        match rustc_output {
+                            Ok(output) if output.status.success() => {
                                 eprintln!("Successfully compiled to binary: {}", output_file);
                             }
-                            Ok(_) => {
-                                eprintln!("Error: Rust compilation failed");
+                            Ok(output) => {
+                                eprintln!("Rust compilation failed:");
+                                io::stderr().write_all(&output.stderr).unwrap();
                                 std::process::exit(1);
                             }
                             Err(e) => {
@@ -123,7 +129,7 @@ fn main() {
                     }
                 }
                 Err(e) => {
-                    eprintln!("{}", e);
+                    print_compile_error(&source, &e);
                     std::process::exit(1);
                 }
             }
@@ -141,7 +147,7 @@ fn main() {
             let rust_code = match compile(&source) {
                 Ok(code) => code,
                 Err(e) => {
-                    eprintln!("{}", e);
+                    print_compile_error(&source, &e);
                     std::process::exit(1);
                 }
             };

@@ -25,6 +25,46 @@ repeat 3 times:
     print("XE is cool!")
 ```
 
+## While loop
+
+Source: `examples/while_loop.xe`
+
+```xe
+count = 0
+
+while count < 5:
+    print(count)
+    count = count + 1
+```
+
+## For loop
+
+Source: `examples/for_loop.xe`
+
+```xe
+total = 0
+
+for item in [1, 2, 3, 4]:
+    total = total + item
+
+print(total)
+```
+
+## Elif chain
+
+Source: `examples/elif.xe`
+
+```xe
+score = 82
+
+if score >= 90:
+    print("A")
+elif score >= 80:
+    print("B")
+else:
+    print("Keep going")
+```
+
 ## Lists
 
 Source: `examples/lists.xe`

@@ -44,10 +44,12 @@ This project is pre-alpha and intended for learning and experimentation, not pro
 ## What you can do today
 
 - Work with numbers, text, booleans, and lists
-- Use `if` and `else`
-- Run fixed-count loops with `repeat N times`
+- Use `if`, `elif`, and `else`
+- Run `repeat`, `while`, and `for ... in ...` loops
+- Use `break` and `continue` inside loops
 - Define functions and use recursion
 - Use built-ins like `print`, `input`, `length`, `type`, and `convert`
+- Reassign outer variables from inside nested blocks without accidental shadowing
 
 ## How to learn it
 

@@ -1,0 +1,7 @@
+# For loop over a list. Accumulates the sum of all items.
+total = 0
+
+for item in [1, 2, 3, 4]:
+    total = total + item
+
+print(total)

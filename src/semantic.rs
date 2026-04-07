@@ -14,6 +14,7 @@ const BUILTINS: &[(&str, Option<usize>)] = &[
 pub struct SemanticAnalyzer {
     scopes: Vec<HashSet<String>>,
     functions: HashMap<String, usize>, // name -> param count
+    loop_depth: usize,
 }
 
 impl SemanticAnalyzer {
@@ -27,6 +28,7 @@ impl SemanticAnalyzer {
         Self {
             scopes: vec![HashSet::new()],
             functions,
+            loop_depth: 0,
         }
     }
 
@@ -56,7 +58,9 @@ impl SemanticAnalyzer {
         match &stmt.kind {
             StatementKind::Assignment { name, value } => {
                 self.analyze_expression(value)?;
-                self.define_variable(name);
+                if !self.is_variable_defined(name) {
+                    self.define_variable(name);
+                }
             }
             StatementKind::If {
                 condition,
@@ -78,13 +82,40 @@ impl SemanticAnalyzer {
                     self.pop_scope();
                 }
             }
-            StatementKind::Repeat { count, body } => {
-                self.analyze_expression(count)?;
+            StatementKind::While { condition, body } => {
+                self.analyze_expression(condition)?;
+                self.loop_depth += 1;
                 self.push_scope();
                 for s in body {
                     self.analyze_statement(s)?;
                 }
                 self.pop_scope();
+                self.loop_depth -= 1;
+            }
+            StatementKind::Repeat { count, body } => {
+                self.analyze_expression(count)?;
+                self.loop_depth += 1;
+                self.push_scope();
+                for s in body {
+                    self.analyze_statement(s)?;
+                }
+                self.pop_scope();
+                self.loop_depth -= 1;
+            }
+            StatementKind::For {
+                variable,
+                iterable,
+                body,
+            } => {
+                self.analyze_expression(iterable)?;
+                self.loop_depth += 1;
+                self.push_scope();
+                self.define_variable(variable);
+                for s in body {
+                    self.analyze_statement(s)?;
+                }
+                self.pop_scope();
+                self.loop_depth -= 1;
             }
             StatementKind::FunctionDef { name: _, params, body } => {
                 self.push_scope();
@@ -99,6 +130,22 @@ impl SemanticAnalyzer {
             StatementKind::Return { value } => {
                 if let Some(expr) = value {
                     self.analyze_expression(expr)?;
+                }
+            }
+            StatementKind::Break => {
+                if self.loop_depth == 0 {
+                    return Err(XeError::new(
+                        XeErrorKind::BreakOutsideLoop,
+                        Some(stmt.span.clone()),
+                    ));
+                }
+            }
+            StatementKind::Continue => {
+                if self.loop_depth == 0 {
+                    return Err(XeError::new(
+                        XeErrorKind::ContinueOutsideLoop,
+                        Some(stmt.span.clone()),
+                    ));
                 }
             }
             StatementKind::Expression(expr) => {

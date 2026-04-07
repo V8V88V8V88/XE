@@ -79,13 +79,15 @@ Valid conversion targets currently documented in XE:
 
 ## Conditionals
 
-XE uses indentation-based blocks for `if` and `else`.
+XE uses indentation-based blocks for `if`, `elif`, and `else`.
 
 ```xe
 score = 82
 
 if score >= 90:
     print("A")
+elif score >= 80:
+    print("B")
 else:
     print("Keep going")
 ```
@@ -115,6 +117,68 @@ repeat 3 times:
 ```
 
 `N` can be a number or a variable that stores a number.
+
+Assignments inside the loop update outer variables if they already exist:
+
+```xe
+count = 0
+
+repeat 3 times:
+    count = count + 1
+
+print(count)
+```
+
+## While loops
+
+Use `while` when the loop should keep running until a condition becomes false.
+
+```xe
+count = 0
+
+while count < 3:
+    print(count)
+    count = count + 1
+```
+
+## For loops
+
+Use `for name in iterable` to walk through a list or text value.
+
+```xe
+total = 0
+
+for item in [1, 2, 3]:
+    total = total + item
+
+print(total)
+```
+
+For text, XE iterates one character at a time:
+
+```xe
+for ch in "XE":
+    print(ch)
+```
+
+## Break and continue
+
+Inside `repeat`, `while`, and `for` loops you can use:
+
+- `break` to leave the loop immediately
+- `continue` to skip to the next iteration
+
+```xe
+count = 0
+
+while true:
+    count = count + 1
+    if count == 2:
+        continue
+    if count == 4:
+        break
+    print(count)
+```
 
 ## Functions
 
@@ -179,6 +243,8 @@ Current built-ins:
 ## Quick summary
 
 - Data types: number, text, boolean, list
-- Control flow: `if`, `else`, `repeat N times`
+- Typing: dynamic at runtime, with semantic checks for names and control flow
+- Control flow: `if`, `elif`, `else`, `repeat N times`, `while`, `for ... in ...`
+- Loop control: `break`, `continue`
 - Functions: `function name(args):` and `return`
 - Blocks: indentation with spaces, not braces

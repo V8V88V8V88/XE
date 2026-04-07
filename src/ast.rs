@@ -22,8 +22,17 @@ pub enum StatementKind {
         then_block: Vec<Statement>,
         else_block: Option<Vec<Statement>>,
     },
+    While {
+        condition: Expression,
+        body: Vec<Statement>,
+    },
     Repeat {
         count: Expression,
+        body: Vec<Statement>,
+    },
+    For {
+        variable: String,
+        iterable: Expression,
         body: Vec<Statement>,
     },
     FunctionDef {
@@ -34,6 +43,8 @@ pub enum StatementKind {
     Return {
         value: Option<Expression>,
     },
+    Break,
+    Continue,
     Expression(Expression),
 }
 
