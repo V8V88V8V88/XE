@@ -5,6 +5,7 @@ REPO="V8V88V8V88/XE"
 BINARY_NAME="xe"
 INSTALL_DIR="${XE_INSTALL_DIR:-$HOME/.local/bin}"
 VERSION="${XE_VERSION:-latest}"
+TMP_DIR=""
 
 log() {
   printf '%s\n' "$1"
@@ -17,6 +18,12 @@ fail() {
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1
+}
+
+cleanup() {
+  if [ -n "${TMP_DIR}" ] && [ -d "${TMP_DIR}" ]; then
+    rm -rf "${TMP_DIR}"
+  fi
 }
 
 detect_os() {
@@ -73,7 +80,6 @@ main() {
   local arch
   local asset
   local base_url
-  local tmp_dir
   local archive_path
 
   os="$(detect_os)"
@@ -86,16 +92,16 @@ main() {
     base_url="https://github.com/${REPO}/releases/download/${VERSION}"
   fi
 
-  tmp_dir="$(mktemp -d)"
-  trap 'rm -rf "$tmp_dir"' EXIT
-  archive_path="${tmp_dir}/${asset}"
+  TMP_DIR="$(mktemp -d)"
+  trap cleanup EXIT
+  archive_path="${TMP_DIR}/${asset}"
 
   log "Downloading ${asset}..."
   download "${base_url}/${asset}" "$archive_path"
 
   mkdir -p "$INSTALL_DIR"
-  tar -xzf "$archive_path" -C "$tmp_dir"
-  install -m 0755 "${tmp_dir}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
+  tar -xzf "$archive_path" -C "$TMP_DIR"
+  install -m 0755 "${TMP_DIR}/${BINARY_NAME}" "${INSTALL_DIR}/${BINARY_NAME}"
 
   log "Installed XE to ${INSTALL_DIR}/${BINARY_NAME}"
 
