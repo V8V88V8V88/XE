@@ -3,6 +3,7 @@ import { defineConfig } from "vitepress";
 export default defineConfig({
   title: "XE",
   description: "A small programming language that compiles into Rust and runs as a native binary.",
+  head: [["link", { rel: "icon", type: "image/png", href: "/XElogo.png" }]],
   markdown: {
     languageAlias: {
       xe: "python",
