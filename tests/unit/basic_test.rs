@@ -124,6 +124,9 @@ fn test_arithmetic() {
 
     let output = run_xe("print(100 / 4)").unwrap();
     assert_eq!(output.trim(), "25");
+
+    let output = run_xe("print(-5)").unwrap();
+    assert_eq!(output.trim(), "-5");
 }
 
 #[test]
@@ -538,6 +541,20 @@ print(items[5])
     assert!(result
         .unwrap_err()
         .contains("Runtime error: list index 5 out of bounds"));
+}
+
+#[test]
+fn test_runtime_error_for_negative_index() {
+    let result = run_xe(
+        r#"
+items = [1, 2, 3]
+print(items[-1])
+"#,
+    );
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .contains("Runtime error: index access expected a non-negative integer, got -1"));
 }
 
 #[test]

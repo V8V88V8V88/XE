@@ -666,8 +666,7 @@ fn xe_iter(value: &XeValue) -> Vec<XeValue> {
             },
             ExpressionKind::UnaryOp { op, operand } => match op {
                 UnaryOperator::Negate => {
-                    self.emit("XeValue::Number(-(");
-                    self.emit("xe_expect_number(&");
+                    self.emit("XeValue::Number(-xe_expect_number(&");
                     self.generate_expression(operand);
                     self.emit(", \"unary '-'\"))");
                 }
