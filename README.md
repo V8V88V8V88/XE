@@ -160,6 +160,26 @@ Use the script output for screenshots or performance notes, because the exact nu
 
 ---
 
+## Verification
+
+To run the full automated compiler and CLI test suite:
+
+```bash
+cargo test -- --nocapture
+```
+
+At the time of writing, this runs **42 integration tests** covering parsing, control flow, functions, runtime errors, binary generation, and installer behavior.
+
+You can also verify the documentation build with:
+
+```bash
+cd docs
+npm install
+npm run docs:build
+```
+
+---
+
 ## What you can write in XE
 
 **Data types**
