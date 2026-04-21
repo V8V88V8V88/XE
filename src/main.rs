@@ -7,7 +7,7 @@ mod semantic;
 
 use std::env;
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -66,6 +66,10 @@ fn print_compile_error(source: &str, error: &XeError) {
 
 fn clean_temp_dir(path: &std::path::Path) {
     let _ = fs::remove_dir_all(path);
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 fn cargo_bin_dir() -> Option<PathBuf> {
@@ -210,17 +214,32 @@ fn ensure_rustc_available() -> PathBuf {
     std::process::exit(1);
 }
 
+#[cfg(unix)]
 fn default_install_dir() -> Result<PathBuf, String> {
-    if let Ok(home) = env::var("HOME") {
-        return Ok(PathBuf::from(home).join(".local").join("bin"));
+    let home = env::var("HOME")
+        .map_err(|_| "could not determine the home directory for installation".to_string())?;
+    Ok(PathBuf::from(home).join(".local").join("bin"))
+}
+
+#[cfg(windows)]
+fn default_install_dir() -> Result<PathBuf, String> {
+    if let Ok(local_app_data) = env::var("LOCALAPPDATA") {
+        return Ok(PathBuf::from(local_app_data)
+            .join("Programs")
+            .join("XE")
+            .join("bin"));
     }
 
-    #[cfg(windows)]
     if let Ok(profile) = env::var("USERPROFILE") {
-        return Ok(PathBuf::from(profile).join(".local").join("bin"));
+        return Ok(PathBuf::from(profile)
+            .join("AppData")
+            .join("Local")
+            .join("Programs")
+            .join("XE")
+            .join("bin"));
     }
 
-    Err("could not determine the home directory for installation".to_string())
+    Err("could not determine the local application data directory for installation".to_string())
 }
 
 fn resolve_install_source() -> Result<PathBuf, String> {
@@ -244,6 +263,208 @@ fn resolve_install_source() -> Result<PathBuf, String> {
     }
 
     Ok(current_exe)
+}
+
+fn current_path_contains(dir: &Path) -> bool {
+    env::var_os("PATH")
+        .map(|value| env::split_paths(&value).any(|entry| entry == dir))
+        .unwrap_or(false)
+}
+
+fn prepend_to_current_path(dir: &Path) {
+    if current_path_contains(dir) {
+        return;
+    }
+
+    let mut paths: Vec<PathBuf> = env::var_os("PATH")
+        .map(|value| env::split_paths(&value).collect())
+        .unwrap_or_default();
+    paths.insert(0, dir.to_path_buf());
+
+    if let Ok(joined) = env::join_paths(paths) {
+        env::set_var("PATH", joined);
+    }
+}
+
+#[cfg(unix)]
+fn shell_profile_path() -> Option<PathBuf> {
+    let home = PathBuf::from(env::var("HOME").ok()?);
+    let shell = env::var("SHELL").unwrap_or_default();
+
+    if shell.ends_with("zsh") {
+        return Some(home.join(".zprofile"));
+    }
+
+    if shell.ends_with("bash") {
+        let bash_profile = home.join(".bash_profile");
+        if bash_profile.exists() {
+            return Some(bash_profile);
+        }
+    }
+
+    Some(home.join(".profile"))
+}
+
+#[cfg(unix)]
+fn path_export_line(dir: &Path) -> String {
+    if let Ok(home) = env::var("HOME") {
+        let home_path = PathBuf::from(&home);
+        if let Ok(relative) = dir.strip_prefix(&home_path) {
+            if !relative.as_os_str().is_empty() {
+                let relative = relative.to_string_lossy().replace('\\', "/");
+                return format!("export PATH=\"$HOME/{}:$PATH\"", relative);
+            }
+        }
+    }
+
+    format!("export PATH={}:$PATH", shell_quote(&dir.to_string_lossy()))
+}
+
+#[cfg(unix)]
+fn persist_path_entry(dir: &Path) -> Result<bool, String> {
+    let profile = shell_profile_path()
+        .ok_or_else(|| "could not determine which shell profile to update".to_string())?;
+    let export_line = path_export_line(dir);
+    let existing = fs::read_to_string(&profile).unwrap_or_default();
+
+    if existing.contains(&export_line) {
+        return Ok(false);
+    }
+
+    let mut updated = existing;
+    if !updated.is_empty() && !updated.ends_with('\n') {
+        updated.push('\n');
+    }
+    updated.push_str("# Added by XE installer\n");
+    updated.push_str(&export_line);
+    updated.push('\n');
+
+    fs::write(&profile, updated)
+        .map_err(|e| format!("failed to update '{}': {}", profile.display(), e))?;
+    Ok(true)
+}
+
+#[cfg(windows)]
+fn persist_path_entry(dir: &Path) -> Result<bool, String> {
+    let dir_str = dir.to_string_lossy().replace('\'', "''");
+    let command = format!(
+        "$dir = '{}'; \
+         $current = [Environment]::GetEnvironmentVariable('Path', 'User'); \
+         $entries = @(); \
+         if ($current) {{ $entries = $current.Split(';') | Where-Object {{ $_ }} }}; \
+         if ($entries -contains $dir) {{ exit 0 }}; \
+         $newPath = if ([string]::IsNullOrEmpty($current)) {{ $dir }} else {{ \"$dir;$current\" }}; \
+         [Environment]::SetEnvironmentVariable('Path', $newPath, 'User'); \
+         exit 10;"
+    );
+
+    let status = Command::new("powershell")
+        .arg("-NoProfile")
+        .arg("-ExecutionPolicy")
+        .arg("Bypass")
+        .arg("-Command")
+        .arg(command)
+        .status()
+        .map_err(|e| format!("failed to update the user PATH: {}", e))?;
+
+    match status.code() {
+        Some(0) => Ok(false),
+        Some(10) => Ok(true),
+        _ => Err(format!("failed to update the user PATH (status {})", status)),
+    }
+}
+
+fn prompt_yes_no(message: &str) -> bool {
+    if !io::stdin().is_terminal() {
+        return false;
+    }
+
+    eprint!("{} [y/N]: ", message);
+    let _ = io::stderr().flush();
+
+    let mut response = String::new();
+    if io::stdin().read_line(&mut response).is_err() {
+        return false;
+    }
+
+    matches!(response.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+}
+
+#[cfg(unix)]
+fn relaunch_install_with_elevation(args: &[String]) -> Result<i32, String> {
+    let current_exe = env::current_exe()
+        .map_err(|e| format!("failed to determine current executable path: {}", e))?;
+    let status = Command::new("sudo")
+        .arg(current_exe)
+        .arg("install")
+        .args(args)
+        .status()
+        .map_err(|e| format!("failed to start elevated installer with sudo: {}", e))?;
+    Ok(status.code().unwrap_or(1))
+}
+
+#[cfg(windows)]
+fn relaunch_install_with_elevation(args: &[String]) -> Result<i32, String> {
+    let current_exe = env::current_exe()
+        .map_err(|e| format!("failed to determine current executable path: {}", e))?;
+    let exe = current_exe.to_string_lossy().replace('\'', "''");
+    let argument_items = std::iter::once("install".to_string())
+        .chain(args.iter().cloned())
+        .map(|arg| format!("'{}'", arg.replace('\'', "''")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let command = format!(
+        "$proc = Start-Process -Verb RunAs -Wait -PassThru -FilePath '{}' -ArgumentList @({}); exit $proc.ExitCode",
+        exe, argument_items
+    );
+
+    let status = Command::new("powershell")
+        .arg("-NoProfile")
+        .arg("-ExecutionPolicy")
+        .arg("Bypass")
+        .arg("-Command")
+        .arg(command)
+        .status()
+        .map_err(|e| format!("failed to start elevated installer with UAC: {}", e))?;
+    Ok(status.code().unwrap_or(1))
+}
+
+fn exit_with_permission_guidance(args: &[String], install_dir: &Path, operation: &str) -> ! {
+    let target = install_dir.display();
+    let guidance = if cfg!(windows) {
+        format!(
+            "Permission denied while trying to {} '{}'. Relaunch with administrator access?",
+            operation, target
+        )
+    } else {
+        format!(
+            "Permission denied while trying to {} '{}'. Retry with sudo?",
+            operation, target
+        )
+    };
+
+    if prompt_yes_no(&guidance) {
+        match relaunch_install_with_elevation(args) {
+            Ok(code) => std::process::exit(code),
+            Err(message) => {
+                eprintln!("Error: {}", message);
+                std::process::exit(1);
+            }
+        }
+    }
+
+    if cfg!(windows) {
+        eprintln!(
+            "Error: permission denied while trying to {} '{}'. Run the command again from an Administrator shell or choose a user-writable directory.",
+            operation, target
+        );
+    } else {
+        eprintln!(
+            "Error: permission denied while trying to {} '{}'. Run the command again with sudo or choose a user-writable directory.",
+            operation, target
+        );
+    }
+    std::process::exit(1);
 }
 
 fn install_binary(args: &[String]) {
@@ -272,6 +493,9 @@ fn install_binary(args: &[String]) {
     };
 
     if let Err(e) = fs::create_dir_all(&install_dir) {
+        if e.kind() == io::ErrorKind::PermissionDenied {
+            exit_with_permission_guidance(args, &install_dir, "create");
+        }
         eprintln!(
             "Error: Failed to create install directory '{}': {}",
             install_dir.display(),
@@ -284,6 +508,9 @@ fn install_binary(args: &[String]) {
     let target = install_dir.join(target_name);
 
     if let Err(e) = fs::copy(&source, &target) {
+        if e.kind() == io::ErrorKind::PermissionDenied {
+            exit_with_permission_guidance(args, &target, "write");
+        }
         eprintln!(
             "Error: Failed to install '{}' to '{}': {}",
             source.display(),
@@ -295,6 +522,9 @@ fn install_binary(args: &[String]) {
 
     #[cfg(unix)]
     if let Err(e) = fs::set_permissions(&target, fs::Permissions::from_mode(0o755)) {
+        if e.kind() == io::ErrorKind::PermissionDenied {
+            exit_with_permission_guidance(args, &target, "set permissions on");
+        }
         eprintln!(
             "Error: Installed binary at '{}' but could not update permissions: {}",
             target.display(),
@@ -303,11 +533,41 @@ fn install_binary(args: &[String]) {
         std::process::exit(1);
     }
 
+    prepend_to_current_path(&install_dir);
+
     eprintln!("Installed XE to {}", target.display());
-    eprintln!(
-        "Add '{}' to your PATH if it is not already available in new shells.",
-        install_dir.display()
-    );
+    match persist_path_entry(&install_dir) {
+        Ok(true) => {
+            if cfg!(windows) {
+                eprintln!(
+                    "Added '{}' to your user PATH. Open a new shell to use 'xe' directly.",
+                    install_dir.display()
+                );
+            } else {
+                eprintln!(
+                    "Added '{}' to your shell PATH configuration. Open a new shell to use 'xe' directly.",
+                    install_dir.display()
+                );
+            }
+        }
+        Ok(false) => {
+            if current_path_contains(&install_dir) {
+                eprintln!("'{}' is already available in PATH.", install_dir.display());
+            } else {
+                eprintln!(
+                    "'{}' is already configured for future shells. Open a new shell to use 'xe' directly.",
+                    install_dir.display()
+                );
+            }
+        }
+        Err(message) => {
+            eprintln!("Warning: {}", message);
+            eprintln!(
+                "Add '{}' to your PATH manually if you want to run 'xe' directly in new shells.",
+                install_dir.display()
+            );
+        }
+    }
 }
 
 fn main() {

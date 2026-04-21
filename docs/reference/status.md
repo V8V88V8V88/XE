@@ -41,7 +41,7 @@ XE is pre-alpha. The full compiler pipeline is present:
 - arithmetic, comparison, and boolean operators
 - dynamic runtime typing with semantic checks for names, arity, and loop control
 
-Current public release line: `v0.1.1`
+Current public release line: `v0.1.2`
 
 ## Planned work
 

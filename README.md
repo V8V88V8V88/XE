@@ -271,7 +271,7 @@ Possible future steps: better optimizations (e.g. bytecode or IR), more built-in
 
 ## Project Status
 
-**Current Version:** 0.1.1 pre-alpha
+**Current Version:** 0.1.2 pre-alpha
 
 The XE compiler is currently in its **Pre-Alpha** stage. The core pipeline works and is covered by integration tests, but the project is still a research prototype.
 
