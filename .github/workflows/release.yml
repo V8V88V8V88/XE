@@ -39,6 +39,11 @@ jobs:
             binary_name: xe
             archive_kind: tar
           - runner: windows-latest
+            target: x86_64-pc-windows-gnu
+            asset_name: xe-x86_64-pc-windows-gnu.zip
+            binary_name: xe.exe
+            archive_kind: zip
+          - runner: windows-latest
             target: x86_64-pc-windows-msvc
             asset_name: xe-x86_64-pc-windows-msvc.zip
             binary_name: xe.exe
@@ -77,7 +82,7 @@ jobs:
           Remove-Item "dist/xe.exe"
 
       - name: Upload packaged asset
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.target }}
           path: dist/${{ matrix.asset_name }}
@@ -89,7 +94,7 @@ jobs:
 
     steps:
       - name: Download packaged artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v6
         with:
           path: dist
           merge-multiple: true

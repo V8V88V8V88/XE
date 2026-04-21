@@ -168,7 +168,7 @@ fn install_rust_toolchain() -> Result<(), String> {
     let command = format!(
         "$ProgressPreference='SilentlyContinue'; \
          Invoke-WebRequest https://win.rustup.rs/x86_64 -OutFile '{}'; \
-         Start-Process -Wait -FilePath '{}' -ArgumentList '-y';",
+         Start-Process -Wait -FilePath '{}' -ArgumentList '-y', '--default-host', 'x86_64-pc-windows-gnu', '--profile', 'minimal';",
         installer_str, installer_str
     );
 
@@ -355,7 +355,8 @@ fn persist_path_entry(dir: &Path) -> Result<bool, String> {
          if ($entries -contains $dir) {{ exit 0 }}; \
          $newPath = if ([string]::IsNullOrEmpty($current)) {{ $dir }} else {{ \"$dir;$current\" }}; \
          [Environment]::SetEnvironmentVariable('Path', $newPath, 'User'); \
-         exit 10;"
+         exit 10;",
+        dir_str
     );
 
     let status = Command::new("powershell")
