@@ -47,7 +47,9 @@ fn print_usage() {
     eprintln!("  xe compile <file.xe> -o <out>  Compile and build a native executable");
     eprintln!("  xe install [--to <dir>]        Install the current XE binary into a local bin directory");
     eprintln!("  xe run <file.xe>               Compile and run the program");
+    eprintln!("  xe update                      Check for updates and install the latest version");
     eprintln!("  xe help                        Show this help message");
+    eprintln!("  xe --version, -v               Show the version of the compiler");
 }
 
 fn read_source(path: &str) -> String {
@@ -97,6 +99,33 @@ fn command_available(program: &Path) -> bool {
         .status()
         .map(|status| status.success())
         .unwrap_or(false)
+}
+
+fn update_xe() {
+    println!("Checking for updates...");
+    
+    let status = self_update::backends::github::Update::configure()
+        .repo_owner("V8V88V8V88")
+        .repo_name("XE")
+        .bin_name("xe")
+        .show_download_progress(true)
+        .current_version(env!("CARGO_PKG_VERSION"))
+        .build()
+        .and_then(|update| update.update());
+
+    match status {
+        Ok(status) => {
+            if status.updated() {
+                println!("Successfully updated to version {}!", status.version());
+            } else {
+                println!("XE is already up to date (version {}).", status.version());
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to update XE: {}", e);
+            std::process::exit(1);
+        }
+    }
 }
 
 fn rustc_executable_name() -> &'static str {
@@ -582,6 +611,12 @@ fn main() {
     match args[1].as_str() {
         "help" | "--help" | "-h" => {
             print_usage();
+        }
+        "version" | "--version" | "-v" => {
+            println!("xe version {}", env!("CARGO_PKG_VERSION"));
+        }
+        "update" => {
+            update_xe();
         }
         "install" => {
             install_binary(&args[2..]);

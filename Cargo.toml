@@ -7,6 +7,7 @@ description = "XE Programming Language"
 license = "GPL-3.0-or-later"
 
 [dependencies]
+self_update = { version = "0.44.0", features = ["archive-tar", "compression-flate2", "archive-zip", "compression-zip-deflate"] }
 
 [[test]]
 name = "integration"
