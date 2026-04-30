@@ -20,6 +20,57 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
 
+append_path_line() {
+  local rc_file="$1"
+  local install_dir="$2"
+
+  if [ ! -f "$rc_file" ]; then
+    touch "$rc_file"
+  fi
+
+  if grep -Fqs "$install_dir" "$rc_file"; then
+    return 0
+  fi
+
+  printf '\n# Added by XE installer\nexport PATH="%s:$PATH"\n' "$install_dir" >> "$rc_file"
+}
+
+maybe_update_path() {
+  local install_dir="$1"
+  local updated=1
+
+  # Update all common shell config files that exist
+  for rc_file in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
+    if [ -f "$rc_file" ]; then
+      append_path_line "$rc_file" "$install_dir"
+      log "Added PATH entry to ${rc_file}"
+      updated=0
+    fi
+  done
+
+  # If none of the files existed, fall back to creating one based on the shell
+  if [ "$updated" -eq 1 ]; then
+    local fallback=""
+    case "$(basename "${SHELL:-}")" in
+      zsh) fallback="$HOME/.zshrc" ;;
+      bash)
+        if [ "$(detect_os)" = "darwin" ]; then
+          fallback="$HOME/.bash_profile"
+        else
+          fallback="$HOME/.bashrc"
+        fi
+        ;;
+      *) fallback="$HOME/.profile" ;;
+    esac
+
+    append_path_line "$fallback" "$install_dir"
+    log "Added PATH entry to ${fallback}"
+  fi
+
+  log "Open a new terminal to start using XE."
+  return 0
+}
+
 cleanup() {
   if [ -n "${TMP_DIR}" ] && [ -d "${TMP_DIR}" ]; then
     rm -rf "${TMP_DIR}"
@@ -106,7 +157,9 @@ main() {
   log "Installed XE to ${INSTALL_DIR}/${BINARY_NAME}"
 
   if ! printf '%s' "${PATH}" | tr ':' '\n' | grep -Fxq "$INSTALL_DIR"; then
-    log "Add ${INSTALL_DIR} to your PATH if it is not already available in new shells."
+    if ! maybe_update_path "$INSTALL_DIR"; then
+      log "Add ${INSTALL_DIR} to your PATH if it is not already available in new shells."
+    fi
   fi
 
   log "Run 'xe help' to verify the installation."
