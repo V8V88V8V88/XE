@@ -2171,7 +2171,7 @@ dependencies = [
 
 [[package]]
 name = "xe"
-version = "0.1.2-alpha.7"
+version = "0.1.2+7"
 dependencies = [
  "self_update",
 ]

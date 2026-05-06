@@ -75,6 +75,7 @@ fn command_available(program: &Path) -> bool {
 }
 
 fn update_xe() {
+    let current_version = env!("CARGO_PKG_VERSION");
     println!("Checking for updates...");
 
     let status = self_update::backends::github::Update::configure()
@@ -82,7 +83,7 @@ fn update_xe() {
         .repo_name("XE")
         .bin_name("xe")
         .show_download_progress(true)
-        .current_version(env!("CARGO_PKG_VERSION"))
+        .current_version(current_version)
         .build()
         .and_then(|update| update.update());
 

@@ -1,6 +1,6 @@
 # Project Status
 
-XE is **pre-alpha** (current line: `v0.1.2-alpha.7`).
+XE is **pre-alpha** (current line: `v0.1.2+7`).
 
 ## Works now
 
