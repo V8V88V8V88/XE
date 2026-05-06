@@ -307,6 +307,7 @@ fn xe_iter(value: &XeValue) -> Vec<XeValue> {
 
     fn generate_statement(&mut self, stmt: &Statement) {
         match &stmt.kind {
+            StatementKind::Import { .. } | StatementKind::FromImport { .. } => {}
             StatementKind::Assignment { name, value } => {
                 self.emit_indent();
                 let sanitized = Self::sanitize_name(name);

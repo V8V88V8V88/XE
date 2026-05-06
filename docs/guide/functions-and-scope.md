@@ -4,10 +4,10 @@ Functions are one of the most important parts of XE because they show how the la
 
 ## Defining a function
 
-Use the `function` keyword:
+Use the `fun` keyword:
 
 ```xe
-function add(a, b):
+fun add(a, b):
     return a + b
 ```
 
@@ -22,7 +22,7 @@ print(add(3, 5))
 Parameters are local names inside the function body.
 
 ```xe
-function greet(name):
+fun greet(name):
     print("Hello " + name)
     return 0
 ```
@@ -34,7 +34,7 @@ XE checks argument count during semantic analysis, so calling a function with th
 Use `return` to send a value back to the caller.
 
 ```xe
-function square(n):
+fun square(n):
     return n * n
 ```
 
@@ -53,6 +53,7 @@ They can access:
 - values created inside the function body
 - built-in functions
 - other user-defined functions
+- imported user-defined functions
 
 They do not capture outer variables from the surrounding program.
 
@@ -61,7 +62,7 @@ This means the following program is invalid:
 ```xe
 x = 10
 
-function show():
+fun show():
     print(x)
 ```
 
@@ -75,7 +76,7 @@ Inside a function, a name behaves like any other XE name:
 - later assignment reuses that same variable
 
 ```xe
-function counter():
+fun counter():
     total = 0
     total = total + 1
     return total
@@ -86,7 +87,7 @@ function counter():
 Functions can call themselves:
 
 ```xe
-function fib(n):
+fun fib(n):
     if n <= 1:
         return n
     return fib(n - 1) + fib(n - 2)
@@ -101,6 +102,8 @@ XE does not currently support:
 - closures
 - nested function capture
 - lexical capture of outer variables
+
+Imports do not change that rule. A function can call an imported XE function, but it still cannot read a top-level variable from its surrounding module.
 
 That is an intentional current limitation of the language implementation.
 

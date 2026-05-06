@@ -64,6 +64,7 @@ impl SemanticAnalyzer {
 
     fn analyze_statement(&mut self, stmt: &Statement) -> XeResult<()> {
         match &stmt.kind {
+            StatementKind::Import { .. } | StatementKind::FromImport { .. } => {}
             StatementKind::Assignment { name, value } => {
                 self.analyze_expression(value)?;
                 if !self.is_variable_defined(name) {

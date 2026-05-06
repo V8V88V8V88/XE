@@ -4,11 +4,24 @@ use std::fmt;
 pub struct Span {
     pub line: usize,
     pub column: usize,
+    pub source_name: Option<String>,
 }
 
 impl Span {
     pub fn new(line: usize, column: usize) -> Self {
-        Self { line, column }
+        Self {
+            line,
+            column,
+            source_name: None,
+        }
+    }
+
+    pub fn with_source(line: usize, column: usize, source_name: impl Into<String>) -> Self {
+        Self {
+            line,
+            column,
+            source_name: Some(source_name.into()),
+        }
     }
 }
 
@@ -50,6 +63,16 @@ pub enum XeErrorKind {
     ReturnOutsideFunction,
     BreakOutsideLoop,
     ContinueOutsideLoop,
+    ModuleNotFound(String),
+    CircularImport(String),
+    ImportNotTopLevel,
+    ImportAfterExecutableStatement,
+    ImportedNameNotFound {
+        module: String,
+        name: String,
+    },
+    DuplicateImport(String),
+    ImportNameConflict(String),
 
     // General
     IoError(String),
@@ -111,6 +134,30 @@ impl XeError {
             XeErrorKind::ContinueOutsideLoop => {
                 "continue can only be used inside a loop".to_string()
             }
+            XeErrorKind::ModuleNotFound(module) => {
+                format!("module '{}' could not be found", module)
+            }
+            XeErrorKind::CircularImport(path) => {
+                format!("circular import detected: {}", path)
+            }
+            XeErrorKind::ImportNotTopLevel => {
+                "import statements are only allowed at the top level".to_string()
+            }
+            XeErrorKind::ImportAfterExecutableStatement => {
+                "import statements must appear before executable top-level statements".to_string()
+            }
+            XeErrorKind::ImportedNameNotFound { module, name } => {
+                format!("module '{}' does not export '{}'", module, name)
+            }
+            XeErrorKind::DuplicateImport(name) => {
+                format!("'{}' is imported more than once", name)
+            }
+            XeErrorKind::ImportNameConflict(name) => {
+                format!(
+                    "imported name '{}' conflicts with an existing function",
+                    name
+                )
+            }
             XeErrorKind::IoError(msg) => format!("I/O error: {}", msg),
         }
     }
@@ -124,11 +171,14 @@ impl XeError {
                     .unwrap_or_default();
                 let caret_column = span.column.saturating_sub(1);
                 let caret_padding = " ".repeat(caret_column);
+                let header = match &span.source_name {
+                    Some(source_name) => {
+                        format!("Error in {} at {}: {}", source_name, span, self.message)
+                    }
+                    None => format!("Error at {}: {}", span, self.message),
+                };
 
-                format!(
-                    "Error at {}: {}\n{}\n{}^",
-                    span, self.message, line_text, caret_padding
-                )
+                format!("{}\n{}\n{}^", header, line_text, caret_padding)
             }
             None => self.to_string(),
         }

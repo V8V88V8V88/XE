@@ -44,6 +44,7 @@ The main goal is clarity and implementation quality, not feature count.
 - **Native executables** – XE uses `rustc` to build platform binaries.
 - **Clear structure** – lexer, parser, semantic analysis, and code generation are separated cleanly.
 - **Useful diagnostics** – compiler errors include line/column context and a caret marker.
+- **Multi-file programs** – XE modules can import other XE files and compile into one native binary.
 - **Good for learning** – the codebase is small enough to understand without a large framework.
 
 ---
@@ -139,6 +140,12 @@ Emits the Rust source XE generates to standard output.
 xe compile examples/hello.xe
 ```
 
+### Run a Multi-File XE Program
+Imports are resolved relative to the importing `.xe` file, and both `run` and `compile` link the full XE module graph before generating Rust.
+```bash
+xe run examples/modules/main.xe
+```
+
 ---
 
 ## Benchmark
@@ -168,7 +175,7 @@ To run the full automated compiler and CLI test suite:
 cargo test -- --nocapture
 ```
 
-At the time of writing, this runs **42 integration tests** covering parsing, control flow, functions, runtime errors, binary generation, and installer behavior.
+At the time of writing, this runs **52 integration tests** covering parsing, imports, control flow, functions, runtime errors, binary generation, and installer behavior.
 
 You can also verify the documentation build with:
 
@@ -204,11 +211,28 @@ XE is currently **dynamically typed**. Values are represented at runtime and ope
 You can define functions, e.g.:
 
 ```xe
-function greet(name):
+fun greet(name):
     print("Hello " + name)
 ```
 
 Functions currently use local scope only. They do not capture outer variables.
+
+**Modules**
+
+XE can split code across multiple files:
+
+```xe
+from math_utils import double
+print(double(21))
+```
+
+Current module rules:
+
+- `import module_name` loads another `.xe` file and brings its top-level functions into scope.
+- `from module_name import name` imports selected top-level functions.
+- imports are resolved relative to the importing file.
+- imports must appear before executable top-level statements.
+- imported module top-level code runs once before the entry module starts executing.
 
 **Built-in functions**
 
@@ -256,6 +280,7 @@ else:
 - The feature set is small on purpose.
 - No concurrency (no threads, async, etc.).
 - No networking or file I/O in the language yet.
+- No module-level variables inside functions yet; functions still do not close over top-level bindings.
 - The focus is on doing things correctly, not on fancy optimizations.
 
 Possible future steps: better optimizations (e.g. bytecode or IR), more built-ins, a formatter, debugger, or IDE support.
@@ -271,7 +296,7 @@ Possible future steps: better optimizations (e.g. bytecode or IR), more built-in
 
 ## Project Status
 
-**Current Version:** 0.1.2 pre-alpha
+**Current Version:** 0.1.2-alpha.7 pre-alpha
 
 The XE compiler is currently in its **Pre-Alpha** stage. The core pipeline works and is covered by integration tests, but the project is still a research prototype.
 

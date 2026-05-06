@@ -29,6 +29,14 @@ impl Parser {
     fn parse_statement(&mut self) -> XeResult<Statement> {
         let span = self.current_span();
 
+        if self.check(&TokenKind::Import) {
+            return self.parse_import_statement();
+        }
+
+        if self.check(&TokenKind::From) {
+            return self.parse_from_import_statement();
+        }
+
         // Function definition
         if self.check(&TokenKind::Function) {
             return self.parse_function_def();
@@ -97,6 +105,35 @@ impl Parser {
         self.expect_statement_end()?;
         Ok(Statement {
             kind: StatementKind::Expression(expr),
+            span,
+        })
+    }
+
+    fn parse_import_statement(&mut self) -> XeResult<Statement> {
+        let span = self.current_span();
+        self.advance(); // consume 'import'
+        let module = self.parse_module_path()?;
+        self.expect_statement_end()?;
+        Ok(Statement {
+            kind: StatementKind::Import { module },
+            span,
+        })
+    }
+
+    fn parse_from_import_statement(&mut self) -> XeResult<Statement> {
+        let span = self.current_span();
+        self.advance(); // consume 'from'
+        let module = self.parse_module_path()?;
+        self.expect(&TokenKind::Import)?;
+
+        let mut names = vec![self.expect_identifier()?];
+        while self.match_token(&TokenKind::Comma) {
+            names.push(self.expect_identifier()?);
+        }
+
+        self.expect_statement_end()?;
+        Ok(Statement {
+            kind: StatementKind::FromImport { module, names },
             span,
         })
     }
@@ -437,6 +474,14 @@ impl Parser {
             }
         }
         Ok(elements)
+    }
+
+    fn parse_module_path(&mut self) -> XeResult<ModulePath> {
+        let mut segments = vec![self.expect_identifier()?];
+        while self.match_token(&TokenKind::Dot) {
+            segments.push(self.expect_identifier()?);
+        }
+        Ok(ModulePath { segments })
     }
 
     fn peek_binary_operator(&self) -> Option<BinaryOperator> {

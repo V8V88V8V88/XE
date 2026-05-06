@@ -193,7 +193,7 @@ while true:
 Functions let you name reusable logic.
 
 ```xe
-function add(a, b):
+fun add(a, b):
     return a + b
 
 print(add(3, 5))
@@ -202,19 +202,37 @@ print(add(3, 5))
 You can also define functions that do an action and return `0`:
 
 ```xe
-function greet(name):
+fun greet(name):
     print("Hello " + name)
     return 0
 
 greet("World")
 ```
 
+## Modules
+
+XE can import functions from other `.xe` files.
+
+```xe
+from math_utils import double
+print(double(21))
+```
+
+You can also import every top-level function from a module:
+
+```xe
+import helpers
+print(square(4))
+```
+
+Imports resolve relative to the current file and must come before executable top-level statements.
+
 ## Recursion
 
 Recursion works and is useful for classic examples like Fibonacci.
 
 ```xe
-function fib(n):
+fun fib(n):
     if n <= 1:
         return n
     return fib(n - 1) + fib(n - 2)
@@ -254,7 +272,7 @@ Current built-ins:
 - Typing: dynamic at runtime, with semantic checks for names and control flow
 - Control flow: `if`, `elif`, `else`, `repeat N times`, `while`, `for ... in ...`
 - Loop control: `break`, `continue`
-- Functions: `function name(args):` and `return`
+- Functions: `fun name(args):` and `return`
 - Blocks: indentation with spaces, not braces
 
 For the more detailed version of each topic, continue with:

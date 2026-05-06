@@ -25,6 +25,8 @@ pub enum TokenKind {
     Return,
     Break,
     Continue,
+    Import,
+    From,
 
     // Operators
     Plus,
@@ -47,6 +49,7 @@ pub enum TokenKind {
     RightBracket,
     Colon,
     Comma,
+    Dot,
 
     // Structure
     Newline,
@@ -72,6 +75,7 @@ impl Token {
 
 pub struct Lexer {
     source: Vec<char>,
+    source_name: Option<String>,
     pos: usize,
     line: usize,
     column: usize,
@@ -81,9 +85,15 @@ pub struct Lexer {
 }
 
 impl Lexer {
+    #[allow(dead_code)]
     pub fn new(source: &str) -> Self {
+        Self::new_with_source(source, None)
+    }
+
+    pub fn new_with_source(source: &str, source_name: Option<String>) -> Self {
         Self {
             source: source.chars().collect(),
+            source_name,
             pos: 0,
             line: 1,
             column: 1,
@@ -134,7 +144,7 @@ impl Lexer {
             if let Some(token) = self.pending_tokens.pop() {
                 return Ok(token);
             }
-            return Ok(Token::new(TokenKind::Eof, self.line, self.column));
+            return Ok(self.make_token(TokenKind::Eof, self.line, self.column));
         }
 
         let c = self.peek();
@@ -147,7 +157,7 @@ impl Lexer {
 
         // Handle newlines
         if c == '\n' {
-            let token = Token::new(TokenKind::Newline, self.line, self.column);
+            let token = self.make_token(TokenKind::Newline, self.line, self.column);
             self.advance();
             self.line += 1;
             self.column = 1;
@@ -161,7 +171,7 @@ impl Lexer {
             if self.peek() == '\n' {
                 self.advance();
             }
-            let token = Token::new(TokenKind::Newline, self.line, self.column);
+            let token = self.make_token(TokenKind::Newline, self.line, self.column);
             self.line += 1;
             self.column = 1;
             self.at_line_start = true;
@@ -210,17 +220,17 @@ impl Lexer {
 
         if indent > current_indent {
             self.indent_stack.push(indent);
-            return Ok(Some(Token::new(TokenKind::Indent, self.line, 1)));
+            return Ok(Some(self.make_token(TokenKind::Indent, self.line, 1)));
         } else if indent < current_indent {
             while self.indent_stack.len() > 1 && *self.indent_stack.last().unwrap() > indent {
                 self.indent_stack.pop();
                 self.pending_tokens
-                    .push(Token::new(TokenKind::Dedent, self.line, 1));
+                    .push(self.make_token(TokenKind::Dedent, self.line, 1));
             }
             if *self.indent_stack.last().unwrap() != indent {
                 return Err(XeError::new(
                     XeErrorKind::InvalidIndentation,
-                    Some(Span::new(self.line, 1)),
+                    Some(self.make_span(self.line, 1)),
                 ));
             }
             return Ok(self.pending_tokens.pop());
@@ -239,7 +249,7 @@ impl Lexer {
             if self.peek() == '\n' {
                 return Err(XeError::new(
                     XeErrorKind::UnterminatedString,
-                    Some(Span::new(start_line, start_column)),
+                    Some(self.make_span(start_line, start_column)),
                 ));
             }
             if self.peek() == '\\' {
@@ -266,11 +276,7 @@ impl Lexer {
         }
 
         self.advance(); // consume closing quote
-        Ok(Token::new(
-            TokenKind::String(value),
-            start_line,
-            start_column,
-        ))
+        Ok(self.make_token(TokenKind::String(value), start_line, start_column))
     }
 
     fn scan_number(&mut self) -> XeResult<Token> {
@@ -283,10 +289,10 @@ impl Lexer {
         }
 
         match num_str.parse::<f64>() {
-            Ok(n) => Ok(Token::new(TokenKind::Number(n), self.line, start_column)),
+            Ok(n) => Ok(self.make_token(TokenKind::Number(n), self.line, start_column)),
             Err(_) => Err(XeError::new(
                 XeErrorKind::InvalidNumber(num_str),
-                Some(Span::new(self.line, start_column)),
+                Some(self.make_span(self.line, start_column)),
             )),
         }
     }
@@ -304,7 +310,8 @@ impl Lexer {
             "if" => TokenKind::If,
             "else" => TokenKind::Else,
             "elif" => TokenKind::Elif,
-            "function" => TokenKind::Function,
+            // Support both `function` (legacy) and `fun` (preferred).
+            "function" | "fun" => TokenKind::Function,
             "while" => TokenKind::While,
             "for" => TokenKind::For,
             "in" => TokenKind::In,
@@ -318,10 +325,12 @@ impl Lexer {
             "return" => TokenKind::Return,
             "break" => TokenKind::Break,
             "continue" => TokenKind::Continue,
+            "import" => TokenKind::Import,
+            "from" => TokenKind::From,
             _ => TokenKind::Identifier(ident),
         };
 
-        Ok(Token::new(kind, self.line, start_column))
+        Ok(self.make_token(kind, self.line, start_column))
     }
 
     fn scan_operator_or_delimiter(&mut self, start_column: usize) -> XeResult<Token> {
@@ -340,6 +349,7 @@ impl Lexer {
             ']' => TokenKind::RightBracket,
             ':' => TokenKind::Colon,
             ',' => TokenKind::Comma,
+            '.' => TokenKind::Dot,
             '=' => {
                 if self.peek() == '=' {
                     self.advance();
@@ -378,12 +388,12 @@ impl Lexer {
             _ => {
                 return Err(XeError::new(
                     XeErrorKind::UnexpectedCharacter(c),
-                    Some(Span::new(self.line, start_column)),
+                    Some(self.make_span(self.line, start_column)),
                 ));
             }
         };
 
-        Ok(Token::new(kind, self.line, start_column))
+        Ok(self.make_token(kind, self.line, start_column))
     }
 
     fn skip_whitespace_same_line(&mut self) {
@@ -411,5 +421,19 @@ impl Lexer {
 
     fn is_at_end(&self) -> bool {
         self.pos >= self.source.len()
+    }
+
+    fn make_span(&self, line: usize, column: usize) -> Span {
+        match &self.source_name {
+            Some(source_name) => Span::with_source(line, column, source_name.clone()),
+            None => Span::new(line, column),
+        }
+    }
+
+    fn make_token(&self, kind: TokenKind, line: usize, column: usize) -> Token {
+        Token {
+            kind,
+            span: self.make_span(line, column),
+        }
     }
 }

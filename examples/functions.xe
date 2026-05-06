@@ -1,5 +1,5 @@
 # User-defined function + repeat loop. Greets by name, then repeats a message N times.
-function greet(name):
+fun greet(name):
     print("Hello " + name)
     return 0
 

@@ -76,6 +76,32 @@ body {
   background: var(--vp-c-bg);
 }
 
+/* Doc readability tweaks */
+.VPDoc .container {
+  max-width: 1040px;
+}
+
+.vp-doc {
+  font-size: 15px;
+  line-height: 1.7;
+}
+
+@media (min-width: 960px) {
+  .vp-doc {
+    font-size: 15px;
+  }
+}
+
+.vp-doc p,
+.vp-doc li {
+  color: var(--vp-c-text-2);
+}
+
+.vp-doc h2,
+.vp-doc h3 {
+  letter-spacing: -0.02em;
+}
+
 .VPNavBar {
   background: color-mix(in srgb, var(--vp-c-bg) 88%, transparent);
   backdrop-filter: blur(16px);

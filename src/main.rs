@@ -1,5 +1,6 @@
 mod ast;
 mod codegen;
+mod compiler;
 mod error;
 mod lexer;
 mod parser;
@@ -13,31 +14,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
-use codegen::CodeGenerator;
-use error::XeError;
-use lexer::Lexer;
-use parser::Parser;
-use semantic::SemanticAnalyzer;
-
-fn compile(source: &str) -> Result<String, XeError> {
-    // Lexing
-    let mut lexer = Lexer::new(source);
-    let tokens = lexer.tokenize()?;
-
-    // Parsing
-    let mut parser = Parser::new(tokens);
-    let program = parser.parse()?;
-
-    // Semantic analysis
-    let mut analyzer = SemanticAnalyzer::new();
-    analyzer.analyze(&program)?;
-
-    // Code generation
-    let mut codegen = CodeGenerator::new();
-    let rust_code = codegen.generate(&program);
-
-    Ok(rust_code)
-}
+use compiler::{compile_path, CompilationFailure};
 
 fn print_usage() {
     eprintln!("XE Programming Language Compiler");
@@ -45,25 +22,21 @@ fn print_usage() {
     eprintln!("Usage:");
     eprintln!("  xe compile <file.xe>           Compile and print generated Rust code");
     eprintln!("  xe compile <file.xe> -o <out>  Compile and build a native executable");
-    eprintln!("  xe install [--to <dir>]        Install the current XE binary into a local bin directory");
+    eprintln!(
+        "  xe install [--to <dir>]        Install the current XE binary into a local bin directory"
+    );
     eprintln!("  xe run <file.xe>               Compile and run the program");
     eprintln!("  xe update                      Check for updates and install the latest version");
     eprintln!("  xe help                        Show this help message");
     eprintln!("  xe --version, -v               Show the version of the compiler");
 }
 
-fn read_source(path: &str) -> String {
-    match fs::read_to_string(path) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Error reading '{}': {}", path, e);
-            std::process::exit(1);
-        }
+fn print_compile_error(error: &CompilationFailure) {
+    if error.source.is_empty() {
+        eprintln!("{}", error.error);
+    } else {
+        eprintln!("{}", error.error.render_with_source(&error.source));
     }
-}
-
-fn print_compile_error(source: &str, error: &XeError) {
-    eprintln!("{}", error.render_with_source(source));
 }
 
 fn clean_temp_dir(path: &std::path::Path) {
@@ -103,7 +76,7 @@ fn command_available(program: &Path) -> bool {
 
 fn update_xe() {
     println!("Checking for updates...");
-    
+
     let status = self_update::backends::github::Update::configure()
         .repo_owner("V8V88V8V88")
         .repo_name("XE")
@@ -191,8 +164,7 @@ fn install_rust_toolchain() -> Result<(), String> {
 
 #[cfg(windows)]
 fn install_rust_toolchain() -> Result<(), String> {
-    let temp_installer =
-        env::temp_dir().join(format!("rustup-init-{}.exe", std::process::id()));
+    let temp_installer = env::temp_dir().join(format!("rustup-init-{}.exe", std::process::id()));
     let installer_str = temp_installer.to_string_lossy().replace('\'', "''");
     let command = format!(
         "$ProgressPreference='SilentlyContinue'; \
@@ -400,7 +372,10 @@ fn persist_path_entry(dir: &Path) -> Result<bool, String> {
     match status.code() {
         Some(0) => Ok(false),
         Some(10) => Ok(true),
-        _ => Err(format!("failed to update the user PATH (status {})", status)),
+        _ => Err(format!(
+            "failed to update the user PATH (status {})",
+            status
+        )),
     }
 }
 
@@ -628,10 +603,9 @@ fn main() {
                 std::process::exit(1);
             }
 
-            let input_file = &args[2];
-            let source = read_source(input_file);
+            let input_file = Path::new(&args[2]);
 
-            match compile(&source) {
+            match compile_path(input_file) {
                 Ok(rust_code) => {
                     if args.len() == 3 {
                         print!("{}", rust_code);
@@ -682,7 +656,7 @@ fn main() {
                     }
                 }
                 Err(e) => {
-                    print_compile_error(&source, &e);
+                    print_compile_error(&e);
                     std::process::exit(1);
                 }
             }
@@ -694,13 +668,12 @@ fn main() {
                 std::process::exit(1);
             }
 
-            let input_file = &args[2];
-            let source = read_source(input_file);
+            let input_file = Path::new(&args[2]);
 
-            let rust_code = match compile(&source) {
+            let rust_code = match compile_path(input_file) {
                 Ok(code) => code,
                 Err(e) => {
-                    print_compile_error(&source, &e);
+                    print_compile_error(&e);
                     std::process::exit(1);
                 }
             };

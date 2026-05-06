@@ -1,0 +1,5 @@
+from math_utils import double
+from strings import shout
+
+result = double(21)
+print(shout(convert(result, "text")))

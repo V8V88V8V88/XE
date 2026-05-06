@@ -59,7 +59,7 @@ These statements start a block:
 - `repeat count times:`
 - `while condition:`
 - `for name in iterable:`
-- `function name(args):`
+- `fun name(args):`
 
 ## Comments
 
@@ -87,14 +87,23 @@ items = [10, 20, 30]
 print(items[1])
 ```
 
+## Imports
+
+XE supports two import forms:
+
+```xe
+import helpers
+from helpers import square
+```
+
+Imports are top-level statements. They must appear before executable top-level code in the file.
+
 ## What XE does not support in syntax yet
 
 These are not part of the language right now:
 
 - `const` declarations
-- `fun` as a function keyword
 - list mutation like `items[0] = 42`
-- modules or `import`
 - multi-line strings
 
 ## Next steps

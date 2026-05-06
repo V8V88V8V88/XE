@@ -1,5 +1,5 @@
 # Simple function call. Defines greet(name) and calls it for Alice and Bob.
-function greet(name):
+fun greet(name):
     print("Hello, " + name + "!")
     return 0
 

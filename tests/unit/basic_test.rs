@@ -105,6 +105,101 @@ fn run_cli(args: &[&std::ffi::OsStr]) -> Result<String, String> {
     }
 }
 
+fn write_project_files(root: &std::path::Path, files: &[(&str, &str)]) -> Result<(), String> {
+    for (relative_path, source) in files {
+        let full_path = root.join(relative_path);
+        if let Some(parent) = full_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        fs::write(full_path, source).map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
+fn run_xe_project(entry_file: &str, files: &[(&str, &str)]) -> Result<String, String> {
+    let id = get_unique_id();
+    let temp_dir = std::env::temp_dir().join(format!("xe_project_run_{}", id));
+    let _ = fs::create_dir_all(&temp_dir);
+    write_project_files(&temp_dir, files)?;
+
+    let output = Command::new(env!("CARGO_BIN_EXE_xe"))
+        .arg("run")
+        .arg(temp_dir.join(entry_file))
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
+fn compile_xe_project(entry_file: &str, files: &[(&str, &str)]) -> Result<String, String> {
+    let id = get_unique_id();
+    let temp_dir = std::env::temp_dir().join(format!("xe_project_compile_{}", id));
+    let _ = fs::create_dir_all(&temp_dir);
+    write_project_files(&temp_dir, files)?;
+
+    let output = Command::new(env!("CARGO_BIN_EXE_xe"))
+        .arg("compile")
+        .arg(temp_dir.join(entry_file))
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
+fn compile_and_run_project_binary(
+    entry_file: &str,
+    files: &[(&str, &str)],
+) -> Result<String, String> {
+    let id = get_unique_id();
+    let temp_dir = std::env::temp_dir().join(format!("xe_project_binary_{}", id));
+    let _ = fs::create_dir_all(&temp_dir);
+    write_project_files(&temp_dir, files)?;
+
+    let binary_path = if cfg!(windows) {
+        temp_dir.join("program.exe")
+    } else {
+        temp_dir.join("program")
+    };
+
+    let compile_output = Command::new(env!("CARGO_BIN_EXE_xe"))
+        .arg("compile")
+        .arg(temp_dir.join(entry_file))
+        .arg("-o")
+        .arg(&binary_path)
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    if !compile_output.status.success() {
+        let _ = fs::remove_dir_all(&temp_dir);
+        return Err(String::from_utf8_lossy(&compile_output.stderr).to_string());
+    }
+
+    let run_output = Command::new(&binary_path)
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    if run_output.status.success() {
+        Ok(String::from_utf8_lossy(&run_output.stdout).to_string())
+    } else {
+        Err(String::from_utf8_lossy(&run_output.stderr).to_string())
+    }
+}
+
 #[test]
 fn test_hello_world() {
     let output = run_xe(r#"print("Hello, World!")"#).unwrap();
@@ -205,7 +300,7 @@ print(count)
 fn test_function_definition() {
     let output = run_xe(
         r#"
-function double(n):
+fun double(n):
     return n * 2
 
 print(double(21))
@@ -606,10 +701,10 @@ fn test_return_outside_function_error() {
 fn test_duplicate_function_definition_error() {
     let result = run_xe(
         r#"
-function answer():
+fun answer():
     return 1
 
-function answer():
+fun answer():
     return 2
 "#,
     );
@@ -625,7 +720,7 @@ fn test_function_scope_does_not_capture_outer_variables() {
         r#"
 x = 1
 
-function show():
+fun show():
     print(x)
 
 show()
@@ -688,4 +783,296 @@ fn test_install_command_copies_executable() {
     assert!(stderr.contains("XE Programming Language Compiler"));
 
     let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn test_from_import_across_files_runs_in_run_mode() {
+    let output = run_xe_project(
+        "main.xe",
+        &[
+            (
+                "main.xe",
+                r#"
+from math_utils import double
+print(double(21))
+"#,
+            ),
+            (
+                "math_utils.xe",
+                r#"
+fun double(n):
+    return n * 2
+"#,
+            ),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(output.trim(), "42");
+}
+
+#[test]
+fn test_import_all_brings_exported_functions_into_scope() {
+    let output = run_xe_project(
+        "main.xe",
+        &[
+            (
+                "main.xe",
+                r#"
+import helpers
+print(square(7))
+"#,
+            ),
+            (
+                "helpers.xe",
+                r#"
+fun square(n):
+    return n * n
+"#,
+            ),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(output.trim(), "49");
+}
+
+#[test]
+fn test_imported_module_functions_can_call_their_own_imports() {
+    let output = run_xe_project(
+        "main.xe",
+        &[
+            (
+                "main.xe",
+                r#"
+from math_ops import quadruple
+print(quadruple(5))
+"#,
+            ),
+            (
+                "math_ops.xe",
+                r#"
+from math_utils import double
+
+fun quadruple(n):
+    return double(double(n))
+"#,
+            ),
+            (
+                "math_utils.xe",
+                r#"
+fun double(n):
+    return n * 2
+"#,
+            ),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(output.trim(), "20");
+}
+
+#[test]
+fn test_module_initialization_runs_once_in_dependency_order() {
+    let output = run_xe_project(
+        "main.xe",
+        &[
+            (
+                "main.xe",
+                r#"
+from a import run_a
+from b import run_b
+
+run_a()
+run_b()
+"#,
+            ),
+            (
+                "a.xe",
+                r#"
+import shared
+
+fun run_a():
+    print("A")
+"#,
+            ),
+            (
+                "b.xe",
+                r#"
+import shared
+
+fun run_b():
+    print("B")
+"#,
+            ),
+            (
+                "shared.xe",
+                r#"
+print("shared")
+"#,
+            ),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(output.trim(), "shared\nA\nB");
+}
+
+#[test]
+fn test_compile_mode_builds_runnable_binary_with_imports() {
+    let output = compile_and_run_project_binary(
+        "main.xe",
+        &[
+            (
+                "main.xe",
+                r#"
+from strings import shout
+print(shout("xe"))
+"#,
+            ),
+            (
+                "strings.xe",
+                r#"
+fun shout(value):
+    return value + "!"
+"#,
+            ),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(output.trim(), "xe!");
+}
+
+#[test]
+fn test_compile_without_o_prints_linked_rust_for_imports() {
+    let rust_code = compile_xe_project(
+        "main.xe",
+        &[
+            (
+                "main.xe",
+                r#"
+from math_utils import double
+print(double(10))
+"#,
+            ),
+            (
+                "math_utils.xe",
+                r#"
+fun double(n):
+    return n * 2
+"#,
+            ),
+        ],
+    )
+    .unwrap();
+
+    assert!(rust_code.contains("fn main()"));
+    assert!(rust_code.contains("xe_m"));
+}
+
+#[test]
+fn test_missing_module_reports_import_error() {
+    let result = run_xe_project(
+        "main.xe",
+        &[(
+            "main.xe",
+            r#"
+import missing
+"#,
+        )],
+    );
+
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .contains("module 'missing' could not be found"));
+}
+
+#[test]
+fn test_missing_export_reports_module_symbol_error() {
+    let result = run_xe_project(
+        "main.xe",
+        &[
+            (
+                "main.xe",
+                r#"
+from math_utils import triple
+print(triple(3))
+"#,
+            ),
+            (
+                "math_utils.xe",
+                r#"
+fun double(n):
+    return n * 2
+"#,
+            ),
+        ],
+    );
+
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("does not export 'triple'"));
+}
+
+#[test]
+fn test_imports_must_come_before_top_level_executable_statements() {
+    let result = run_xe_project(
+        "main.xe",
+        &[
+            (
+                "main.xe",
+                r#"
+print("before")
+import helpers
+"#,
+            ),
+            (
+                "helpers.xe",
+                r#"
+fun helper():
+    return 1
+"#,
+            ),
+        ],
+    );
+
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .contains("import statements must appear before executable top-level statements"));
+}
+
+#[test]
+fn test_circular_imports_are_rejected() {
+    let result = run_xe_project(
+        "main.xe",
+        &[
+            (
+                "main.xe",
+                r#"
+from a import run
+run()
+"#,
+            ),
+            (
+                "a.xe",
+                r#"
+import b
+
+fun run():
+    return 0
+"#,
+            ),
+            (
+                "b.xe",
+                r#"
+import a
+"#,
+            ),
+        ],
+    );
+
+    assert!(result.is_err());
+    assert!(result.unwrap_err().contains("circular import detected"));
 }

@@ -20,6 +20,9 @@ Compiler errors include:
 - undefined variables
 - undefined functions
 - wrong argument counts
+- missing modules
+- missing imported names
+- circular imports
 - invalid indentation
 - `break` outside loops
 - `continue` outside loops
@@ -104,10 +107,10 @@ XE is usable for small examples, but it still has deliberate limits:
 
 - no list mutation
 - no constants
-- no modules or imports
 - no file I/O or networking in the language
 - no static type checker
 - no closures
+- functions still do not capture top-level variables
 
 Knowing these limits makes it easier to write correct XE programs and to explain the language honestly.
 

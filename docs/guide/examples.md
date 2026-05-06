@@ -15,7 +15,7 @@ print("Hello, World!")
 Source: `examples/functions.xe`
 
 ```xe
-function greet(name):
+fun greet(name):
     print("Hello " + name)
     return 0
 
@@ -106,7 +106,7 @@ print("converted:", x + 5)
 Source: `examples/fib.xe`
 
 ```xe
-function fib(n):
+fun fib(n):
     if n <= 1:
         return n
     return fib(n - 1) + fib(n - 2)
@@ -114,12 +114,49 @@ function fib(n):
 print(fib(10))
 ```
 
+## Modules
+
+Source folder: `examples/modules/`
+
+Files:
+
+- `main.xe` (entry)
+- `math_utils.xe`
+- `strings.xe`
+
+`main.xe`
+```xe
+from math_utils import double
+from strings import shout
+
+result = double(21)
+print(shout(convert(result, "text")))
+```
+
+`math_utils.xe`
+```xe
+fun double(n):
+    return n * 2
+```
+
+`strings.xe`
+```xe
+fun shout(value):
+    return value + "!"
+```
+
+Run it:
+
+```bash
+xe run examples/modules/main.xe
+```
+
 ## More practice examples
 
 ### Factorial
 
 ```xe
-function factorial(n):
+fun factorial(n):
     if n <= 0:
         return 1
     return n * factorial(n - 1)
@@ -145,7 +182,7 @@ else:
 ### Sum 1 to N
 
 ```xe
-function sum_to_n(n):
+fun sum_to_n(n):
     if n <= 0:
         return 0
     return n + sum_to_n(n - 1)

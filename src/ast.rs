@@ -6,6 +6,17 @@ pub struct Program {
 }
 
 #[derive(Debug, Clone)]
+pub struct ModulePath {
+    pub segments: Vec<String>,
+}
+
+impl ModulePath {
+    pub fn as_string(&self) -> String {
+        self.segments.join(".")
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Statement {
     pub kind: StatementKind,
     pub span: Span,
@@ -13,6 +24,13 @@ pub struct Statement {
 
 #[derive(Debug, Clone)]
 pub enum StatementKind {
+    Import {
+        module: ModulePath,
+    },
+    FromImport {
+        module: ModulePath,
+        names: Vec<String>,
+    },
     Assignment {
         name: String,
         value: Expression,
