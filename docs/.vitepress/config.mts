@@ -12,15 +12,14 @@ export default defineConfig({
   themeConfig: {
     logo: "/XElogo.png",
     nav: [
-      { text: "Guide", link: "/guide/getting-started" },
+      { text: "Docs", link: "/guide/getting-started" },
       { text: "Reference", link: "/reference/language" },
       { text: "Status", link: "/reference/status" },
-      { text: "GitHub", link: "https://github.com/V8V88V8V88/XE" },
     ],
     sidebar: {
       "/guide/": [
         {
-          text: "Guide",
+          text: "Docs",
           items: [
             { text: "Getting Started", link: "/guide/getting-started" },
             { text: "Language Basics", link: "/guide/language-basics" },
@@ -39,6 +38,7 @@ export default defineConfig({
           items: [
             { text: "CLI", link: "/reference/cli" },
             { text: "Language", link: "/reference/language" },
+            { text: "Keywords", link: "/guide/keywords" },
             { text: "Status", link: "/reference/status" },
           ],
         },

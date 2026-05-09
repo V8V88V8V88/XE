@@ -1,137 +1,165 @@
 <template>
   <div class="xe-home">
-    <section id="install" class="xe-install-bar xe-reveal">
-      <p class="xe-install-kicker">Install</p>
-      <p class="xe-install-title">Install the latest XE release binary in one command.</p>
-      <div class="xe-command">
-        <code>curl -fsSL https://xe-lang.vercel.app/install.sh | bash</code>
-      </div>
-      <p class="xe-install-note">
-        macOS and Linux are supported by the installer today. Windows users can download the zip
-        from GitHub Releases, and source builds remain available if you want to study or modify the
-        compiler.
-      </p>
-    </section>
+    <button
+      v-if="showScrollDown"
+      type="button"
+      class="xe-scroll-down"
+      @click="scrollToInstall"
+      aria-label="Scroll to install section"
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M7 13l5 5 5-5M7 6l5 5 5-5"/>
+      </svg>
+    </button>
 
-    <section class="xe-grid">
-      <article class="xe-feature xe-panel xe-reveal xe-delay-1">
-        <h3>Readable on the surface</h3>
-        <p>
-          XE uses indentation-based syntax, straightforward control flow, and a small standard
-          vocabulary so the language stays easy to follow in demos and code reviews.
-        </p>
-      </article>
-      <article class="xe-feature xe-panel xe-reveal xe-delay-2">
-        <h3>Rust underneath</h3>
-        <p>
-          Programs are lowered into Rust source and then compiled with <code>rustc</code>. You get
-          a concrete compiler pipeline instead of a black-box runtime.
-        </p>
-      </article>
-      <article class="xe-feature xe-panel xe-reveal xe-delay-3">
-        <h3>Small enough to understand</h3>
-        <p>
-          Lexer, parser, semantic checks, and code generation all fit into a compact codebase. That
-          makes XE useful as both a language and a compiler project.
-        </p>
-      </article>
-    </section>
-
-    <section class="xe-dual">
-      <article class="xe-panel xe-copy xe-reveal xe-delay-1">
-        <p class="xe-section-kicker">Why it works</p>
-        <h2 class="xe-section-title">A minimal language with a real compilation story.</h2>
-        <p>
-          XE is not trying to be everything. It focuses on readable syntax, explicit control flow,
-          and a compiler pipeline you can explain in a classroom, a report, or a live demo without
-          hand-waving.
-        </p>
-        <p>
-          The current implementation supports functions, recursion, lists, indexing,
-          <code>if / elif / else</code>, <code>repeat</code>, <code>while</code>, <code>for</code>,
-          and loop control with clear runtime failures for invalid operations.
-        </p>
-        <div class="xe-inline-links">
-          <a href="/guide/language-basics">Read the language guide</a>
-          <a href="/reference/status">See implementation status</a>
-          <a href="/guide/examples">Run the examples</a>
+    <section id="install" class="xe-install-bar xe-reveal" aria-labelledby="xe-install-heading">
+      <div class="xe-install-content">
+        <h2 id="xe-install-heading" class="xe-install-title">
+          <span class="xe-install-kicker">Install</span>
+          <span class="xe-install-headline">Install the latest XE release binary in one command.</span>
+        </h2>
+        <div class="xe-command-box" role="group" aria-label="Install command">
+          <code id="xe-install-command">curl -fsSL https://xe-lang.vercel.app/install.sh | bash</code>
+          <button
+            type="button"
+            class="xe-copy-trigger"
+            @click="copyCommand"
+            :aria-label="copied ? 'Copied to clipboard' : 'Copy install command'"
+          >
+            <svg v-if="!copied" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+            <svg v-else xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--vp-c-brand-1)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"></polyline></svg>
+          </button>
         </div>
-      </article>
-
-      <div class="xe-code-stack">
-        <article class="xe-code-block xe-reveal xe-delay-2">
-          <div class="xe-code-label"><span>XE Source</span><span>hello.xe</span></div>
-          <pre><code>function greet(name):
-    print("Hello, " + name)
-
-for person in ["World", "Rust"]:
-    greet(person)</code></pre>
-        </article>
-
-        <article class="xe-code-block xe-reveal xe-delay-3">
-          <div class="xe-code-label"><span>Run</span><span>native output</span></div>
-          <pre><code>xe run hello.xe
-
-Hello, World
-Hello, Rust</code></pre>
-        </article>
+        <p class="xe-install-note">
+          macOS and Linux are supported by the installer today. Windows users can download the zip
+          from <a href="https://github.com/V8V88V8V88/XE" target="_blank" rel="noopener noreferrer">GitHub</a>.
+        </p>
       </div>
     </section>
 
-    <section class="xe-pipeline xe-reveal">
-      <article class="xe-stage">
-        <span>01</span>
-        <strong>Write XE</strong>
-        <p>Use compact, indentation-based syntax.</p>
-      </article>
-      <article class="xe-stage">
-        <span>02</span>
-        <strong>Lex + Parse</strong>
-        <p>Turn source text into tokens and an AST.</p>
-      </article>
-      <article class="xe-stage">
-        <span>03</span>
-        <strong>Validate</strong>
-        <p>Check names, arity, loop control, and structure.</p>
-      </article>
-      <article class="xe-stage">
-        <span>04</span>
-        <strong>Generate Rust</strong>
-        <p>Emit explicit Rust code for the XE program.</p>
-      </article>
-      <article class="xe-stage">
-        <span>05</span>
-        <strong>Build Native</strong>
-        <p>Let <code>rustc</code> produce the final executable.</p>
-      </article>
-    </section>
-
-    <section class="xe-status">
-      <article class="xe-status-card xe-reveal xe-delay-1">
-        <p class="xe-section-kicker">What you can use now</p>
-        <h3>Current language surface</h3>
-        <ul class="xe-status-list">
-          <li>numbers, text, booleans, and lists</li>
-          <li>functions, recursion, and returns</li>
-          <li><code>if / elif / else</code>, <code>repeat</code>, <code>while</code>, and <code>for</code></li>
-          <li><code>break</code>, <code>continue</code>, indexing, and built-ins</li>
-          <li>compiler diagnostics with source lines and carets</li>
-        </ul>
-      </article>
-
-      <article class="xe-status-card xe-reveal xe-delay-2">
-        <p class="xe-section-kicker">Project shape</p>
-        <h3>Built to present clearly</h3>
-        <p>
-          XE already has a working compiler pipeline, integration tests, CI, examples, and
-          reference docs. It is still pre-alpha, but it is now in a shape that reads as a coherent
-          language project instead of a loose prototype.
-        </p>
-        <div class="xe-inline-links">
-          <a href="/guide/getting-started">Install and run XE</a>
-          <a href="/reference/cli">Open the CLI reference</a>
+    <section id="faq" class="xe-faq xe-reveal" aria-labelledby="xe-faq-heading">
+      <h2 id="xe-faq-heading" class="xe-section-title">FAQ</h2>
+      <div class="xe-faq-list">
+        <div
+          v-for="(item, index) in faqItems"
+          :key="index"
+          class="xe-faq-item"
+          :class="{ 'xe-faq-active': activeFaq === index }"
+        >
+          <button
+            type="button"
+            class="xe-faq-question"
+            :id="`${faqId}-q-${index}`"
+            :aria-expanded="activeFaq === index"
+            :aria-controls="`${faqId}-a-${index}`"
+            @click="activeFaq = activeFaq === index ? null : index"
+          >
+            <span>{{ item.question }}</span>
+            <span class="xe-faq-icon" aria-hidden="true">{{ activeFaq === index ? '−' : '+' }}</span>
+          </button>
+          <div
+            :id="`${faqId}-a-${index}`"
+            class="xe-faq-answer"
+            role="region"
+            :aria-labelledby="`${faqId}-q-${index}`"
+            :aria-hidden="activeFaq !== index"
+          >
+            <p>{{ item.answer }}</p>
+          </div>
         </div>
-      </article>
+      </div>
     </section>
   </div>
 </template>
+
+<script setup>
+import { ref, onMounted, onUnmounted, useId } from 'vue'
+
+const faqId = useId()
+const activeFaq = ref(null)
+const copied = ref(false)
+const showScrollDown = ref(true)
+
+const handleScroll = () => {
+  showScrollDown.value = window.scrollY < 100
+}
+
+const handleKeydown = (e) => {
+  if (e.key === 'Escape' && activeFaq.value !== null) {
+    activeFaq.value = null
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('scroll', handleScroll, { passive: true })
+  window.addEventListener('keydown', handleKeydown)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('scroll', handleScroll)
+  window.removeEventListener('keydown', handleKeydown)
+})
+
+const scrollToInstall = () => {
+  const el = document.getElementById('install')
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+}
+
+const copyCommand = async () => {
+  const command = 'curl -fsSL https://xe-lang.vercel.app/install.sh | bash'
+  try {
+    await navigator.clipboard.writeText(command)
+    copied.value = true
+  } catch (err) {
+    // Fallback for older browsers
+    const textArea = document.createElement("textarea");
+    textArea.value = command;
+    document.body.appendChild(textArea);
+    textArea.select();
+    try {
+      document.execCommand('copy');
+      copied.value = true;
+    } catch (e) {}
+    document.body.removeChild(textArea);
+  }
+  
+  if (copied.value) {
+    setTimeout(() => {
+      copied.value = false
+    }, 2000)
+  }
+}
+
+const faqItems = [
+  {
+    question: 'What exactly is XE?',
+    answer: 'XE is a small programming language designed for learning and rapid prototyping. It features an indentation-based syntax similar to Python but compiles directly into native Rust source code, which is then built into a standalone executable.'
+  },
+  {
+    question: 'Why compile to Rust instead of using an interpreter?',
+    answer: 'Compiling to Rust allows XE to leverage one of the world\'s most powerful compiler backends (LLVM through rustc). This provides massive performance benefits, exhaustive static analysis, and tiny, standalone binaries without requiring a heavy virtual machine or runtime environment.'
+  },
+  {
+    question: 'Do I need Rust installed to use XE?',
+    answer: 'Yes, XE requires the Rust toolchain (specifically rustc) to build your programs into binaries. However, the XE compiler itself handles the heavy lifting of code generation and binary invocation automatically.'
+  },
+  {
+    question: 'Is XE memory safe?',
+    answer: 'Because XE code is transpiled into high-level Rust code that follows Rust\'s ownership and safety rules, the resulting binaries benefit from the memory safety guarantees of the Rust language backend.'
+  },
+  {
+    question: 'How does the module system work?',
+    answer: 'XE uses a naming-mangled module system. When you import a module, the compiler assigns it a unique ID and renames its internal symbols to prevent conflicts, allowing for complex multi-file projects without namespace pollution.'
+  },
+  {
+    question: 'Is this ready for production use?',
+    answer: 'XE is currently in the "Pre-Alpha" stage. It is an excellent platform for learning about compiler design and language theory, but it is not yet intended for mission-critical production systems.'
+  }
+]
+</script>
+
+<style scoped>
+/* Scoped styles can be added here if needed, but we are using custom.css */
+</style>

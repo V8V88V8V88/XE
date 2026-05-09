@@ -13,11 +13,11 @@ hero:
       text: Install XE
       link: /guide/getting-started#quick-install
     - theme: alt
-      text: Quick Start
+      text: Docs
       link: /guide/getting-started
     - theme: alt
-      text: GitHub
-      link: https://github.com/V8V88V8V88/XE
+      text: FAQ
+      link: "#faq"
 ---
 
 <XeHome />

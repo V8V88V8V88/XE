@@ -1,5 +1,7 @@
 # Language Reference
 
+For a complete list of reserved words, see the [Keyword Reference](/guide/keywords).
+
 ## Data types
 
 | Type | Example | Notes |
