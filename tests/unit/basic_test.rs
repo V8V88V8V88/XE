@@ -580,7 +580,7 @@ print(value)
 fn test_compile_without_o_prints_rust_code() {
     let rust_code = compile_xe(r#"print("Hello")"#).unwrap();
     assert!(rust_code.contains("fn main()"));
-    assert!(rust_code.contains("xe_print"));
+    assert!(rust_code.contains("xe_builtin_print"));
 }
 
 #[test]
@@ -715,8 +715,8 @@ fun answer():
 }
 
 #[test]
-fn test_function_scope_does_not_capture_outer_variables() {
-    let result = run_xe(
+fn test_function_scope_captures_outer_variables() {
+    let output = run_xe(
         r#"
 x = 1
 
@@ -725,9 +725,9 @@ fun show():
 
 show()
 "#,
-    );
-    assert!(result.is_err());
-    assert!(result.unwrap_err().contains("undefined variable 'x'"));
+    )
+    .unwrap();
+    assert_eq!(output.trim(), "1");
 }
 
 #[test]

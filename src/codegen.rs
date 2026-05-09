@@ -18,6 +18,26 @@ impl CodeGenerator {
     }
 
     pub fn generate(&mut self, program: &Program) -> String {
+        // First pass: collect all global variables
+        for stmt in &program.statements {
+            match &stmt.kind {
+                StatementKind::Assignment { name, .. } => {
+                    self.define_variable(name);
+                }
+                StatementKind::FunctionDef { name, body, .. } if name.starts_with("xe_m") => {
+                    // Also scan for global assignments inside module init/functions
+                    for s in body {
+                        if let StatementKind::Assignment { name, .. } = &s.kind {
+                            if name.starts_with("xe_m") {
+                                self.define_variable(name);
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
         // Generate runtime and prelude
         self.emit_prelude();
 
@@ -140,12 +160,12 @@ fn xe_expect_non_negative_integer(value: &XeValue, context: &str) -> usize {
     number as usize
 }
 
-fn xe_print(args: Vec<XeValue>) {
+fn xe_builtin_print(args: Vec<XeValue>) {
     let output: Vec<String> = args.iter().map(|a| a.to_string()).collect();
     println!("{}", output.join(" "));
 }
 
-fn xe_input(prompt: &XeValue) -> XeValue {
+fn xe_builtin_input(prompt: &XeValue) -> XeValue {
     print!("{}", prompt);
     io::stdout().flush().unwrap();
     let mut input = String::new();
@@ -153,7 +173,7 @@ fn xe_input(prompt: &XeValue) -> XeValue {
     XeValue::Text(input.trim().to_string())
 }
 
-fn xe_length(value: &XeValue) -> XeValue {
+fn xe_builtin_length(value: &XeValue) -> XeValue {
     match value {
         XeValue::Text(s) => XeValue::Number(s.len() as f64),
         XeValue::List(l) => XeValue::Number(l.len() as f64),
@@ -164,11 +184,11 @@ fn xe_length(value: &XeValue) -> XeValue {
     }
 }
 
-fn xe_type(value: &XeValue) -> XeValue {
+fn xe_builtin_type(value: &XeValue) -> XeValue {
     XeValue::Text(value.type_name().to_string())
 }
 
-fn xe_convert(value: &XeValue, target: &XeValue) -> XeValue {
+fn xe_builtin_convert(value: &XeValue, target: &XeValue) -> XeValue {
     let target_type = match target {
         XeValue::Text(s) => s.as_str(),
         _ => xe_runtime_error(&format!(
@@ -251,6 +271,17 @@ fn xe_eq(left: &XeValue, right: &XeValue) -> bool {
         (XeValue::Number(a), XeValue::Number(b)) => (a - b).abs() < f64::EPSILON,
         (XeValue::Text(a), XeValue::Text(b)) => a == b,
         (XeValue::Boolean(a), XeValue::Boolean(b)) => a == b,
+        (XeValue::List(a), XeValue::List(b)) => {
+            if a.len() != b.len() {
+                return false;
+            }
+            for (i, item) in a.iter().enumerate() {
+                if !xe_eq(item, &b[i]) {
+                    return false;
+                }
+            }
+            true
+        }
         _ => false,
     }
 }
@@ -301,6 +332,19 @@ fn xe_iter(value: &XeValue) -> Vec<XeValue> {
     }
 }
 
+thread_local! {
+    static XE_GLOBALS: std::cell::RefCell<std::collections::HashMap<String, XeValue>> = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+fn xe_get_global(name: &str) -> XeValue {
+    XE_GLOBALS.with(|g| g.borrow().get(name).cloned().unwrap_or(XeValue::Number(0.0)))
+}
+
+fn xe_set_global(name: &str, value: XeValue) -> XeValue {
+    XE_GLOBALS.with(|g| g.borrow_mut().insert(name.to_string(), value.clone()));
+    value
+}
+
 "#,
         );
     }
@@ -311,14 +355,26 @@ fn xe_iter(value: &XeValue) -> Vec<XeValue> {
             StatementKind::Assignment { name, value } => {
                 self.emit_indent();
                 let sanitized = Self::sanitize_name(name);
-                if self.is_variable_defined(name) {
+                
+                // If we are at the top level (scope 0), it's a global assignment.
+                // Or if it's already defined as a global.
+                if self.scopes.len() == 1 || (self.is_variable_defined(name) && self.get_variable_scope_index(name) == 0) {
+                    self.emit(&format!("xe_set_global(\"{}\", ", sanitized));
+                    self.generate_expression(value);
+                    self.emit(");\n");
+                    if self.scopes.len() == 1 {
+                        self.define_variable(name);
+                    }
+                } else if self.is_variable_defined(name) {
                     self.emit(&format!("{} = ", sanitized));
+                    self.generate_expression(value);
+                    self.emit(";\n");
                 } else {
                     self.define_variable(name);
                     self.emit(&format!("let mut {} = ", sanitized));
+                    self.generate_expression(value);
+                    self.emit(";\n");
                 }
-                self.generate_expression(value);
-                self.emit(";\n");
             }
             StatementKind::If {
                 condition,
@@ -570,7 +626,13 @@ fn xe_iter(value: &XeValue) -> Vec<XeValue> {
                 self.emit("])");
             }
             ExpressionKind::Identifier(name) => {
-                self.emit(&format!("{}.clone()", Self::sanitize_name(name)));
+                let sanitized = Self::sanitize_name(name);
+                if self.is_variable_defined(name) && self.get_variable_scope_index(name) > 0 {
+                    self.emit(&format!("{}.clone()", sanitized));
+                } else {
+                    // Assume global if not local
+                    self.emit(&format!("xe_get_global(\"{}\")", sanitized));
+                }
             }
             ExpressionKind::BinaryOp { left, op, right } => match op {
                 BinaryOperator::Add => {
@@ -680,7 +742,7 @@ fn xe_iter(value: &XeValue) -> Vec<XeValue> {
             ExpressionKind::FunctionCall { name, args } => {
                 match name.as_str() {
                     "print" => {
-                        self.emit("{ xe_print(vec![");
+                        self.emit("{ xe_builtin_print(vec![");
                         for (i, arg) in args.iter().enumerate() {
                             if i > 0 {
                                 self.emit(", ");
@@ -690,7 +752,7 @@ fn xe_iter(value: &XeValue) -> Vec<XeValue> {
                         self.emit("]); XeValue::Number(0.0) }");
                     }
                     "input" => {
-                        self.emit("xe_input(&");
+                        self.emit("xe_builtin_input(&");
                         if !args.is_empty() {
                             self.generate_expression(&args[0]);
                         } else {
@@ -699,17 +761,17 @@ fn xe_iter(value: &XeValue) -> Vec<XeValue> {
                         self.emit(")");
                     }
                     "length" => {
-                        self.emit("xe_length(&");
+                        self.emit("xe_builtin_length(&");
                         self.generate_expression(&args[0]);
                         self.emit(")");
                     }
                     "type" => {
-                        self.emit("xe_type(&");
+                        self.emit("xe_builtin_type(&");
                         self.generate_expression(&args[0]);
                         self.emit(")");
                     }
                     "convert" => {
-                        self.emit("xe_convert(&");
+                        self.emit("xe_builtin_convert(&");
                         self.generate_expression(&args[0]);
                         self.emit(", &");
                         self.generate_expression(&args[1]);
@@ -764,6 +826,15 @@ fn xe_iter(value: &XeValue) -> Vec<XeValue> {
 
     fn is_variable_defined(&self, name: &str) -> bool {
         self.scopes.iter().rev().any(|scope| scope.contains(name))
+    }
+
+    fn get_variable_scope_index(&self, name: &str) -> usize {
+        for (i, scope) in self.scopes.iter().enumerate().rev() {
+            if scope.contains(name) {
+                return i;
+            }
+        }
+        0
     }
 
     fn sanitize_name(name: &str) -> String {

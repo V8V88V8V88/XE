@@ -35,22 +35,43 @@ impl SemanticAnalyzer {
     }
 
     pub fn analyze(&mut self, program: &Program) -> XeResult<()> {
-        // First pass: collect function definitions
+        // First pass: collect function definitions and top-level variables
         for stmt in &program.statements {
-            if let StatementKind::FunctionDef { name, params, .. } = &stmt.kind {
-                if BUILTINS.iter().any(|(n, _)| n == name) {
-                    return Err(XeError::new(
-                        XeErrorKind::CannotRedefineBuiltin(name.clone()),
-                        Some(stmt.span.clone()),
-                    ));
+            match &stmt.kind {
+                StatementKind::FunctionDef {
+                    name,
+                    params,
+                    body,
+                } => {
+                    if BUILTINS.iter().any(|(n, _)| n == name) {
+                        return Err(XeError::new(
+                            XeErrorKind::CannotRedefineBuiltin(name.clone()),
+                            Some(stmt.span.clone()),
+                        ));
+                    }
+                    if self.functions.contains_key(name) {
+                        return Err(XeError::new(
+                            XeErrorKind::DuplicateFunction(name.clone()),
+                            Some(stmt.span.clone()),
+                        ));
+                    }
+                    self.functions.insert(name.clone(), params.len());
+
+                    // Also scan for global assignments inside module init/functions (for linked program)
+                    if name.starts_with("xe_m") {
+                        for s in body {
+                            if let StatementKind::Assignment { name, .. } = &s.kind {
+                                if name.starts_with("xe_m") {
+                                    self.define_variable(name);
+                                }
+                            }
+                        }
+                    }
                 }
-                if self.functions.contains_key(name) {
-                    return Err(XeError::new(
-                        XeErrorKind::DuplicateFunction(name.clone()),
-                        Some(stmt.span.clone()),
-                    ));
+                StatementKind::Assignment { name, .. } => {
+                    self.define_variable(name);
                 }
-                self.functions.insert(name.clone(), params.len());
+                _ => {}
             }
         }
 
@@ -131,7 +152,10 @@ impl SemanticAnalyzer {
                 params,
                 body,
             } => {
-                let saved_scopes = std::mem::replace(&mut self.scopes, vec![HashSet::new()]);
+                // Keep the global scope (first scope) but clear other local scopes
+                let global_scope = self.scopes[0].clone();
+                let saved_scopes = std::mem::replace(&mut self.scopes, vec![global_scope, HashSet::new()]);
+                
                 self.function_depth += 1;
                 for param in params {
                     self.define_variable(param);

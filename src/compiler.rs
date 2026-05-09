@@ -249,25 +249,37 @@ impl ModuleCompiler {
         let mut exports = HashMap::new();
 
         for statement in &program.statements {
-            if let StatementKind::FunctionDef { name, .. } = &statement.kind {
-                if BUILTIN_FUNCTIONS.contains(&name.as_str()) {
-                    return Err(XeError::new(
-                        XeErrorKind::CannotRedefineBuiltin(name.clone()),
-                        Some(statement.span.clone()),
-                    ));
-                }
+            match &statement.kind {
+                StatementKind::FunctionDef { name, .. } => {
+                    if BUILTIN_FUNCTIONS.contains(&name.as_str()) {
+                        return Err(XeError::new(
+                            XeErrorKind::CannotRedefineBuiltin(name.clone()),
+                            Some(statement.span.clone()),
+                        ));
+                    }
 
-                if exports.contains_key(name) {
-                    return Err(XeError::new(
-                        XeErrorKind::DuplicateFunction(name.clone()),
-                        Some(statement.span.clone()),
-                    ));
-                }
+                    if exports.contains_key(name) {
+                        return Err(XeError::new(
+                            XeErrorKind::DuplicateFunction(name.clone()),
+                            Some(statement.span.clone()),
+                        ));
+                    }
 
-                exports.insert(
-                    name.clone(),
-                    format!("xe_m{}_{}", module_id, sanitize_symbol(name)),
-                );
+                    exports.insert(
+                        name.clone(),
+                        format!("xe_m{}_{}", module_id, sanitize_symbol(name)),
+                    );
+                }
+                StatementKind::Assignment { name, .. } => {
+                    // Top-level assignments are also exports
+                    if !exports.contains_key(name) && !BUILTIN_FUNCTIONS.contains(&name.as_str()) {
+                        exports.insert(
+                            name.clone(),
+                            format!("xe_m{}_{}", module_id, sanitize_symbol(name)),
+                        );
+                    }
+                }
+                _ => {}
             }
         }
 
@@ -512,10 +524,19 @@ impl ModuleCompiler {
             StatementKind::Import { .. } | StatementKind::FromImport { .. } => {
                 statement.kind.clone()
             }
-            StatementKind::Assignment { name, value } => StatementKind::Assignment {
-                name: name.clone(),
-                value: self.rewrite_expression(value, module, imported_functions),
-            },
+            StatementKind::Assignment { name, value } => {
+                let rewritten_name = if let Some(exported) = module.exports.get(name) {
+                    exported.clone()
+                } else if let Some(imported) = imported_functions.get(name) {
+                    imported.clone()
+                } else {
+                    name.clone()
+                };
+                StatementKind::Assignment {
+                    name: rewritten_name,
+                    value: self.rewrite_expression(value, module, imported_functions),
+                }
+            }
             StatementKind::If {
                 condition,
                 then_block,
@@ -587,7 +608,16 @@ impl ModuleCompiler {
                     .map(|element| self.rewrite_expression(element, module, imported_functions))
                     .collect(),
             ),
-            ExpressionKind::Identifier(name) => ExpressionKind::Identifier(name.clone()),
+            ExpressionKind::Identifier(name) => {
+                let rewritten_name = if let Some(exported) = module.exports.get(name) {
+                    exported.clone()
+                } else if let Some(imported) = imported_functions.get(name) {
+                    imported.clone()
+                } else {
+                    name.clone()
+                };
+                ExpressionKind::Identifier(rewritten_name)
+            }
             ExpressionKind::BinaryOp { left, op, right } => ExpressionKind::BinaryOp {
                 left: Box::new(self.rewrite_expression(left, module, imported_functions)),
                 op: *op,
