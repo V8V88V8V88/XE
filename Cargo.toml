@@ -1,6 +1,6 @@
 [package]
 name = "xe"
-version = "0.1.2+7"
+version = "0.1.2+8"
 edition = "2021"
 authors = ["Vaibhav Pratap Singh <v8v88v8v88@protonmail.com>"]
 description = "XE Programming Language"

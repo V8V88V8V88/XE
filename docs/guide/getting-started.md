@@ -16,7 +16,7 @@ Useful variants:
 
 ```bash
 XE_INSTALL_DIR="$HOME/bin" curl -fsSL https://xe-lang.vercel.app/install.sh | bash
-XE_VERSION="v0.1.2+7" curl -fsSL https://xe-lang.vercel.app/install.sh | bash
+XE_VERSION="v0.1.2+8" curl -fsSL https://xe-lang.vercel.app/install.sh | bash
 ```
 
 If you are on Windows, use the release zip from GitHub Releases for now.
