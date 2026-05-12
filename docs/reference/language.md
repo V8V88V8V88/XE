@@ -11,7 +11,7 @@ For a complete list of reserved words, see the [Keyword Reference](/guide/keywor
 | `boolean` | `true`, `false` | Condition values |
 | `list` | `[1, 2, 3]` | Ordered values with zero-based indexing |
 
-XE is currently dynamically typed. Variables do not carry declared static types, and values use runtime coercions where the language allows them.
+XE uses an **inferred type system** with a **Typed IR**. The compiler maps variables to native Rust types for performance, falling back to a dynamic `XeValue` only when types are mixed or unknown.
 
 Invalid operations now fail with explicit runtime errors instead of silently producing fallback values.
 
@@ -79,15 +79,16 @@ fun name(arg1, arg2):
     return arg1 + arg2
 ```
 
-Functions currently use their own local scope. They can access:
+Functions can access:
 
 - parameters
 - variables created inside the function
 - built-in functions
 - other user-defined functions
 - imported user-defined functions
+- **global module-level variables**
 
-They do not capture outer variables from surrounding scopes.
+They do not yet support **nested closures** (capturing local variables from an outer function).
 
 ## Modules and imports
 

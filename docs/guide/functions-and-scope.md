@@ -45,34 +45,33 @@ Current rules:
 
 ## Scope model
 
-Functions currently use local scope only.
-
-They can access:
+Functions can access:
 
 - their parameters
 - values created inside the function body
 - built-in functions
 - other user-defined functions
 - imported user-defined functions
+- **global module-level variables**
 
-They do not capture outer variables from the surrounding program.
-
-This means the following program is invalid:
+Example of global access:
 
 ```xe
 x = 10
 
 fun show():
     print(x)
+
+show()
 ```
 
-`x` is global at the top level, but XE functions do not close over that outer binding.
+That is valid in XE because global variables are stored in a registry that all functions can see.
 
 ## Local variables vs reassignment
 
 Inside a function, a name behaves like any other XE name:
 
-- first assignment creates it in the current visible scope
+- first assignment creates it in the current local scope
 - later assignment reuses that same variable
 
 ```xe
@@ -95,17 +94,18 @@ fun fib(n):
 
 XE supports recursion naturally because function definitions are collected before semantic checks.
 
-## No closures yet
+## No nested closures yet
 
-XE does not currently support:
+XE does not currently support **nested closures** (capturing a local variable from an outer function).
 
-- closures
-- nested function capture
-- lexical capture of outer variables
+```xe
+fun outer():
+    x = 10
+    fun inner():
+        print(x) # Error: inner() cannot see x from outer()
+```
 
-Imports do not change that rule. A function can call an imported XE function, but it still cannot read a top-level variable from its surrounding module.
-
-That is an intentional current limitation of the language implementation.
+Imports do not change that rule. A function can call an imported XE function and read global variables, but it cannot capture local variables from another function's stack frame.
 
 ## No contracts or constants yet
 

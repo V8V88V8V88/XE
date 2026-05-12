@@ -175,7 +175,7 @@ To run the full automated compiler and CLI test suite:
 cargo test -- --nocapture
 ```
 
-At the time of writing, this runs **52 integration tests** covering parsing, imports, control flow, functions, runtime errors, binary generation, and installer behavior.
+At the time of writing, this runs **58 automated tests** covering parsing, imports, control flow, functions, runtime errors, binary generation, and installer behavior.
 
 You can also verify the documentation build with:
 
@@ -196,7 +196,7 @@ npm run docs:build
 - **Boolean** – True and false.
 - **List** – An ordered list of values.
 
-XE is currently **dynamically typed**. Values are represented at runtime and operations use XE's coercion rules instead of static type declarations.
+XE uses an **inferred type system** with a **Typed IR**. The compiler tries to map variables to native Rust types (`f64`, `bool`, `String`) for performance, falling back to a dynamic `XeValue` box only when types are mixed or unknown.
 
 **Control flow**
 
@@ -215,7 +215,7 @@ fun greet(name):
     print("Hello " + name)
 ```
 
-Functions currently use local scope only. They do not capture outer variables.
+Functions can access their parameters, local variables, and **global module-level variables**. They do not yet support nested closures (capturing locals from an outer function).
 
 **Modules**
 
@@ -280,7 +280,7 @@ else:
 - The feature set is small on purpose.
 - No concurrency (no threads, async, etc.).
 - No networking or file I/O in the language yet.
-- No module-level variables inside functions yet; functions still do not close over top-level bindings.
+- No nested closures yet; functions cannot capture local variables from an outer function.
 - The focus is on doing things correctly, not on fancy optimizations.
 
 Possible future steps: better optimizations (e.g. bytecode or IR), more built-ins, a formatter, debugger, or IDE support.
@@ -296,12 +296,16 @@ Possible future steps: better optimizations (e.g. bytecode or IR), more built-in
 
 ## Project Status
 
-**Current Version:** 0.1.2+9 pre-alpha
+**Current Version:** 0.1.3 pre-alpha
 
 The XE compiler is currently in its **Pre-Alpha** stage. The core pipeline works and is covered by integration tests, but the project is still a research prototype.
 
 Recent milestone work completed:
 
+- **Fixed binary expression codegen**: Arithmetic between dynamic and native types now compiles correctly.
+- **Fixed assignment double-evaluation**: Side-effectful expressions in module-level assignments (like `input()`) now execute only once.
+- **Hybrid Typed IR**: Improved performance by inferring and using native Rust types where possible.
+- **Global Variable Access**: Functions can now correctly read and write global variables using a thread-local registry.
 - fixed assignment semantics for reassignment across nested blocks
 - added `elif`, `while`, `for`, `break`, and `continue`
 - replaced silent runtime fallbacks with explicit runtime errors

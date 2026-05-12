@@ -1,10 +1,10 @@
 # Types and Values
 
-XE is dynamically typed. Values carry their type at runtime, and operations either succeed according to XE's rules or fail with a runtime error.
+XE uses an **inferred type system** with a **Typed IR**. The compiler tries to map variables directly to native Rust types for performance, falling back to a dynamic `XeValue` box when types are mixed or unknown.
 
-## The four runtime types
+## The four value kinds
 
-XE currently has four value kinds:
+XE currently has four runtime value kinds:
 
 | Type | Example | Notes |
 | --- | --- | --- |
