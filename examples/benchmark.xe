@@ -1,8 +1,4 @@
-# Recursive Fibonacci. Computes fib(35) to demonstrate native compilation speed.
-fun fib(n):
-    if n <= 1:
-        return n
-    return fib(n - 1) + fib(n - 2)
-
-print(fib(35))
-print(fib(38))
+total = 0.0
+repeat 100000000 times:
+    total = total + 1.0
+print(total)

@@ -38,7 +38,6 @@ struct ModuleRecord {
     exports: HashMap<String, String>,
     export_order: Vec<String>,
     imports: Vec<ResolvedImport>,
-    init_symbol: String,
 }
 
 pub fn compile_path(entry_path: &Path) -> Result<String, CompilationFailure> {
@@ -52,12 +51,12 @@ pub fn compile_path(entry_path: &Path) -> Result<String, CompilationFailure> {
         .map_err(|error| compiler.failure_for_error(error))?;
 
     let mut analyzer = SemanticAnalyzer::new();
-    analyzer
+    let typed_program = analyzer
         .analyze(&linked_program)
         .map_err(|error| compiler.failure_for_error(error))?;
 
     let mut codegen = CodeGenerator::new();
-    Ok(codegen.generate(&linked_program))
+    Ok(codegen.generate(&typed_program))
 }
 
 struct ModuleCompiler {
@@ -137,14 +136,13 @@ impl ModuleCompiler {
 
             Ok(ModuleRecord {
                 id: module_id,
-                path: canonical.clone(),
+                path: path.to_path_buf(),
                 source_name: source_name.clone(),
                 source: source.clone(),
                 program,
                 exports,
                 export_order,
                 imports,
-                init_symbol: format!("xe_m{}_init", module_id),
             })
         })();
 
@@ -369,6 +367,7 @@ impl ModuleCompiler {
         let mut module_ids = self.modules.keys().copied().collect::<Vec<_>>();
         module_ids.sort_unstable();
 
+        // 1. Collect all function definitions from all modules
         for module_id in &module_ids {
             let module = self.modules.get(module_id).unwrap();
             let imported_functions = self.build_imported_function_map(module)?;
@@ -387,38 +386,16 @@ impl ModuleCompiler {
             }
         }
 
+        // 2. Collect and flatten all top-level executable statements in dependency order
         for module_id in self.initialization_order(entry_id) {
             let module = self.modules.get(&module_id).unwrap();
-            if !self.module_has_top_level_code(module) {
-                continue;
-            }
-
             let imported_functions = self.build_imported_function_map(module)?;
             let body = self.link_top_level_executable_statements(module, &imported_functions);
-
-            statements.push(Statement {
-                kind: StatementKind::FunctionDef {
-                    name: module.init_symbol.clone(),
-                    params: Vec::new(),
-                    body,
-                },
-                span: module
-                    .program
-                    .statements
-                    .first()
-                    .map(|statement| statement.span.clone())
-                    .unwrap_or_else(|| Span::with_source(1, 1, module.source_name.clone())),
-            });
+            statements.extend(body);
         }
 
+        // 3. Finally, add the entry module's own top-level code
         let entry_module = self.modules.get(&entry_id).unwrap();
-        for module_id in self.initialization_order(entry_id) {
-            let module = self.modules.get(&module_id).unwrap();
-            if self.module_has_top_level_code(module) {
-                statements.push(self.make_init_call(entry_module, &module.init_symbol));
-            }
-        }
-
         let imported_functions = self.build_imported_function_map(entry_module)?;
         statements
             .extend(self.link_top_level_executable_statements(entry_module, &imported_functions));
@@ -707,37 +684,6 @@ impl ModuleCompiler {
             if emitted.insert(import.module_id) {
                 ordered.push(import.module_id);
             }
-        }
-    }
-
-    fn module_has_top_level_code(&self, module: &ModuleRecord) -> bool {
-        module.program.statements.iter().any(|statement| {
-            !matches!(
-                statement.kind,
-                StatementKind::Import { .. }
-                    | StatementKind::FromImport { .. }
-                    | StatementKind::FunctionDef { .. }
-            )
-        })
-    }
-
-    fn make_init_call(&self, entry_module: &ModuleRecord, init_symbol: &str) -> Statement {
-        let span = entry_module
-            .program
-            .statements
-            .first()
-            .map(|statement| statement.span.clone())
-            .unwrap_or_else(|| Span::with_source(1, 1, entry_module.source_name.clone()));
-
-        Statement {
-            kind: StatementKind::Expression(Expression {
-                kind: ExpressionKind::FunctionCall {
-                    name: init_symbol.to_string(),
-                    args: Vec::new(),
-                },
-                span: span.clone(),
-            }),
-            span,
         }
     }
 

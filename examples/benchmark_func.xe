@@ -1,0 +1,7 @@
+fun run_bench():
+    total = 0.0
+    repeat 100000000 times:
+        total = total + 1.0
+    return total
+
+print(run_bench())

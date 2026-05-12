@@ -12,3 +12,7 @@ self_update = { version = "0.44.0", features = ["archive-tar", "compression-flat
 [[test]]
 name = "integration"
 path = "tests/unit/basic_test.rs"
+
+[[test]]
+name = "type_system"
+path = "tests/unit/type_system_test.rs"

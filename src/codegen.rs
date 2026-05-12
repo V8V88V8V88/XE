@@ -17,27 +17,7 @@ impl CodeGenerator {
         }
     }
 
-    pub fn generate(&mut self, program: &Program) -> String {
-        // First pass: collect all global variables
-        for stmt in &program.statements {
-            match &stmt.kind {
-                StatementKind::Assignment { name, .. } => {
-                    self.define_variable(name);
-                }
-                StatementKind::FunctionDef { name, body, .. } if name.starts_with("xe_m") => {
-                    // Also scan for global assignments inside module init/functions
-                    for s in body {
-                        if let StatementKind::Assignment { name, .. } = &s.kind {
-                            if name.starts_with("xe_m") {
-                                self.define_variable(name);
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-
+    pub fn generate(&mut self, program: &TypedProgram) -> String {
         // Generate runtime and prelude
         self.emit_prelude();
 
@@ -46,7 +26,7 @@ impl CodeGenerator {
         let mut main_statements = Vec::new();
 
         for stmt in &program.statements {
-            if matches!(stmt.kind, StatementKind::FunctionDef { .. }) {
+            if matches!(stmt.kind, TypedStatementKind::FunctionDef { .. }) {
                 functions.push(stmt);
             } else {
                 main_statements.push(stmt);
@@ -75,7 +55,7 @@ impl CodeGenerator {
 
     fn emit_prelude(&mut self) {
         self.emit(
-            r#"#![allow(dead_code, unused_mut, unused_variables)]
+            r#"#![allow(dead_code, unused_mut, unused_variables, non_snake_case, unused_parens)]
 use std::io::{self, Write};
 
 #[derive(Clone, Debug)]
@@ -84,6 +64,40 @@ enum XeValue {
     Text(String),
     Boolean(bool),
     List(Vec<XeValue>),
+}
+
+impl From<f64> for XeValue {
+    fn from(n: f64) -> Self { XeValue::Number(n) }
+}
+
+impl From<bool> for XeValue {
+    fn from(b: bool) -> Self { XeValue::Boolean(b) }
+}
+
+impl From<String> for XeValue {
+    fn from(s: String) -> Self { XeValue::Text(s) }
+}
+
+impl From<&str> for XeValue {
+    fn from(s: &str) -> Self { XeValue::Text(s.to_string()) }
+}
+
+impl From<XeValue> for f64 {
+    fn from(v: XeValue) -> Self { xe_expect_number(&v, "conversion") }
+}
+
+impl From<XeValue> for bool {
+    fn from(v: XeValue) -> Self { v.as_bool() }
+}
+
+impl From<XeValue> for String {
+    fn from(v: XeValue) -> Self { v.to_string() }
+}
+
+impl<T: Into<XeValue>> From<Vec<T>> for XeValue {
+    fn from(v: Vec<T>) -> Self {
+        XeValue::List(v.into_iter().map(|item| item.into()).collect())
+    }
 }
 
 impl std::fmt::Display for XeValue {
@@ -120,6 +134,14 @@ impl XeValue {
             XeValue::Boolean(b) => *b,
             XeValue::List(l) => !l.is_empty(),
         }
+    }
+
+    fn as_f64(&self) -> f64 {
+        xe_expect_number(self, "conversion")
+    }
+
+    fn as_string(&self) -> String {
+        self.to_string()
     }
 
     fn type_name(&self) -> &'static str {
@@ -165,18 +187,18 @@ fn xe_builtin_print(args: Vec<XeValue>) {
     println!("{}", output.join(" "));
 }
 
-fn xe_builtin_input(prompt: &XeValue) -> XeValue {
+fn xe_builtin_input(prompt: &str) -> String {
     print!("{}", prompt);
     io::stdout().flush().unwrap();
     let mut input = String::new();
     io::stdin().read_line(&mut input).unwrap();
-    XeValue::Text(input.trim().to_string())
+    input.trim().to_string()
 }
 
-fn xe_builtin_length(value: &XeValue) -> XeValue {
+fn xe_builtin_length(value: &XeValue) -> f64 {
     match value {
-        XeValue::Text(s) => XeValue::Number(s.len() as f64),
-        XeValue::List(l) => XeValue::Number(l.len() as f64),
+        XeValue::Text(s) => s.len() as f64,
+        XeValue::List(l) => l.len() as f64,
         _ => xe_runtime_error(&format!(
             "length() expected text or list, got {}",
             value.type_name()
@@ -184,18 +206,11 @@ fn xe_builtin_length(value: &XeValue) -> XeValue {
     }
 }
 
-fn xe_builtin_type(value: &XeValue) -> XeValue {
-    XeValue::Text(value.type_name().to_string())
+fn xe_builtin_type(value: &XeValue) -> String {
+    value.type_name().to_string()
 }
 
-fn xe_builtin_convert(value: &XeValue, target: &XeValue) -> XeValue {
-    let target_type = match target {
-        XeValue::Text(s) => s.as_str(),
-        _ => xe_runtime_error(&format!(
-            "convert() target must be text, got {}",
-            target.type_name()
-        )),
-    };
+fn xe_builtin_convert(value: &XeValue, target_type: &str) -> XeValue {
     match target_type {
         "number" => match value {
             XeValue::Number(n) => XeValue::Number(*n),
@@ -218,7 +233,7 @@ fn xe_builtin_convert(value: &XeValue, target: &XeValue) -> XeValue {
     }
 }
 
-fn xe_add(left: XeValue, right: XeValue) -> XeValue {
+fn xe_add_dynamic(left: XeValue, right: XeValue) -> XeValue {
     match (&left, &right) {
         (XeValue::Text(a), _) => XeValue::Text(format!("{}{}", a, right)),
         (_, XeValue::Text(b)) => XeValue::Text(format!("{}{}", left, b)),
@@ -236,34 +251,15 @@ fn xe_add(left: XeValue, right: XeValue) -> XeValue {
     }
 }
 
-fn xe_sub(left: XeValue, right: XeValue) -> XeValue {
-    XeValue::Number(
-        xe_expect_number(&left, "operator '-'") - xe_expect_number(&right, "operator '-'"),
-    )
+fn xe_sub_native(left: f64, right: f64) -> f64 { left - right }
+fn xe_mul_native(left: f64, right: f64) -> f64 { left * right }
+fn xe_div_native(left: f64, right: f64) -> f64 {
+    if right == 0.0 { xe_runtime_error("division by zero"); }
+    left / right
 }
-
-fn xe_mul(left: XeValue, right: XeValue) -> XeValue {
-    XeValue::Number(
-        xe_expect_number(&left, "operator '*'") * xe_expect_number(&right, "operator '*'"),
-    )
-}
-
-fn xe_div(left: XeValue, right: XeValue) -> XeValue {
-    let lhs = xe_expect_number(&left, "operator '/'");
-    let rhs = xe_expect_number(&right, "operator '/'");
-    if rhs == 0.0 {
-        xe_runtime_error("division by zero");
-    }
-    XeValue::Number(lhs / rhs)
-}
-
-fn xe_mod(left: XeValue, right: XeValue) -> XeValue {
-    let lhs = xe_expect_number(&left, "operator '%'");
-    let rhs = xe_expect_number(&right, "operator '%'");
-    if rhs == 0.0 {
-        xe_runtime_error("modulo by zero");
-    }
-    XeValue::Number(lhs % rhs)
+fn xe_mod_native(left: f64, right: f64) -> f64 {
+    if right == 0.0 { xe_runtime_error("modulo by zero"); }
+    left % right
 }
 
 fn xe_eq(left: &XeValue, right: &XeValue) -> bool {
@@ -286,24 +282,15 @@ fn xe_eq(left: &XeValue, right: &XeValue) -> bool {
     }
 }
 
-fn xe_lt(left: &XeValue, right: &XeValue) -> bool {
-    xe_expect_number(left, "operator '<'") < xe_expect_number(right, "operator '<'")
+fn xe_index_check(idx: f64) -> usize {
+    if idx < 0.0 || idx.fract() != 0.0 {
+        xe_runtime_error(&format!("index access expected a non-negative integer, got {}", idx));
+    }
+    idx as usize
 }
 
-fn xe_gt(left: &XeValue, right: &XeValue) -> bool {
-    xe_expect_number(left, "operator '>'") > xe_expect_number(right, "operator '>'")
-}
-
-fn xe_le(left: &XeValue, right: &XeValue) -> bool {
-    xe_expect_number(left, "operator '<='") <= xe_expect_number(right, "operator '<='")
-}
-
-fn xe_ge(left: &XeValue, right: &XeValue) -> bool {
-    xe_expect_number(left, "operator '>='") >= xe_expect_number(right, "operator '>='")
-}
-
-fn xe_index(obj: &XeValue, idx: &XeValue) -> XeValue {
-    let i = xe_expect_non_negative_integer(idx, "index access");
+fn xe_index(obj: &XeValue, idx: f64) -> XeValue {
+    let i = xe_index_check(idx);
     match obj {
         XeValue::List(l) => l
             .get(i)
@@ -349,41 +336,49 @@ fn xe_set_global(name: &str, value: XeValue) -> XeValue {
         );
     }
 
-    fn generate_statement(&mut self, stmt: &Statement) {
+    fn generate_statement(&mut self, stmt: &TypedStatement) {
         match &stmt.kind {
-            StatementKind::Import { .. } | StatementKind::FromImport { .. } => {}
-            StatementKind::Assignment { name, value } => {
+            TypedStatementKind::Assignment { name, value } => {
                 self.emit_indent();
                 let sanitized = Self::sanitize_name(name);
                 
-                // If we are at the top level (scope 0), it's a global assignment.
-                // Or if it's already defined as a global.
-                if self.scopes.len() == 1 || (self.is_variable_defined(name) && self.get_variable_scope_index(name) == 0) {
-                    self.emit(&format!("xe_set_global(\"{}\", ", sanitized));
-                    self.generate_expression(value);
-                    self.emit(");\n");
-                    if self.scopes.len() == 1 {
+                if self.scopes.len() == 1 {
+                    let rust_type = value.ty.to_rust_type();
+                    if !self.is_variable_defined(name) {
+                        self.emit(&format!("let mut {}: {} = ", sanitized, rust_type));
+                        self.generate_expression(value);
+                        self.emit(";\n");
                         self.define_variable(name);
+                    } else {
+                        self.emit(&format!("{} = ", sanitized));
+                        self.generate_expression_with_coercion(value, &value.ty);
+                        self.emit(";\n");
                     }
-                } else if self.is_variable_defined(name) {
-                    self.emit(&format!("{} = ", sanitized));
-                    self.generate_expression(value);
-                    self.emit(";\n");
+                    
+                    self.emit_indent();
+                    self.emit(&format!("xe_set_global(\"{}\", XeValue::from({}.clone()));\n", sanitized, sanitized));
                 } else {
-                    self.define_variable(name);
-                    self.emit(&format!("let mut {} = ", sanitized));
-                    self.generate_expression(value);
-                    self.emit(";\n");
+                    if self.is_variable_defined(name) {
+                        self.emit(&format!("{} = ", sanitized));
+                        self.generate_expression_with_coercion(value, &value.ty);
+                        self.emit(";\n");
+                    } else {
+                        self.define_variable(name);
+                        let rust_type = value.ty.to_rust_type();
+                        self.emit(&format!("let mut {}: {} = ", sanitized, rust_type));
+                        self.generate_expression(value);
+                        self.emit(";\n");
+                    }
                 }
             }
-            StatementKind::If {
+            TypedStatementKind::If {
                 condition,
                 then_block,
                 else_block,
             } => {
                 self.emit_indent();
                 self.emit("if ");
-                self.generate_condition(condition);
+                self.generate_expression_with_coercion(condition, &XeType::Boolean);
                 self.emit(" {\n");
                 self.indent_level += 1;
                 self.push_scope();
@@ -408,10 +403,10 @@ fn xe_set_global(name: &str, value: XeValue) -> XeValue {
                 }
                 self.emit("\n");
             }
-            StatementKind::While { condition, body } => {
+            TypedStatementKind::While { condition, body } => {
                 self.emit_indent();
                 self.emit("while ");
-                self.generate_condition(condition);
+                self.generate_expression_with_coercion(condition, &XeType::Boolean);
                 self.emit(" {\n");
                 self.indent_level += 1;
                 self.push_scope();
@@ -423,11 +418,13 @@ fn xe_set_global(name: &str, value: XeValue) -> XeValue {
                 self.emit_indent();
                 self.emit("}\n");
             }
-            StatementKind::Repeat { count, body } => {
+            TypedStatementKind::Repeat { count, body } => {
                 self.emit_indent();
-                self.emit("for _ in 0..xe_expect_non_negative_integer(&");
+                self.emit("for _ in 0..(");
+                self.emit("xe_expect_non_negative_integer(&XeValue::from(");
                 self.generate_expression(count);
-                self.emit(", \"repeat loop count\") {\n");
+                self.emit("), \"repeat loop count\")");
+                self.emit(" as usize) {\n");
                 self.indent_level += 1;
                 self.push_scope();
                 for s in body {
@@ -438,23 +435,36 @@ fn xe_set_global(name: &str, value: XeValue) -> XeValue {
                 self.emit_indent();
                 self.emit("}\n");
             }
-            StatementKind::For {
+            TypedStatementKind::For {
                 variable,
                 iterable,
                 body,
             } => {
                 self.emit_indent();
-                self.emit("for __xe_loop_value in xe_iter(&");
+                self.emit("for __xe_loop_value in xe_iter(&XeValue::from(");
                 self.generate_expression(iterable);
-                self.emit(") {\n");
+                self.emit(")) {\n");
                 self.indent_level += 1;
                 self.push_scope();
                 self.define_variable(variable);
                 self.emit_indent();
-                self.emit(&format!(
-                    "let mut {} = __xe_loop_value;\n",
-                    Self::sanitize_name(variable)
-                ));
+                
+                let elem_ty = match &iterable.ty {
+                    XeType::List(inner) => (**inner).clone(),
+                    XeType::Text => XeType::Text,
+                    _ => XeType::Unknown,
+                };
+                
+                let rust_type = elem_ty.to_rust_type();
+                self.emit(&format!("let mut {}: {} = ", Self::sanitize_name(variable), rust_type));
+                
+                match elem_ty {
+                    XeType::Number => self.emit("__xe_loop_value.as_f64();\n"),
+                    XeType::Boolean => self.emit("__xe_loop_value.as_bool();\n"),
+                    XeType::Text => self.emit("__xe_loop_value.as_string();\n"),
+                    _ => self.emit("__xe_loop_value;\n"),
+                }
+
                 for s in body {
                     self.generate_statement(s);
                 }
@@ -463,19 +473,22 @@ fn xe_set_global(name: &str, value: XeValue) -> XeValue {
                 self.emit_indent();
                 self.emit("}\n");
             }
-            StatementKind::FunctionDef { name, params, body } => {
+            TypedStatementKind::FunctionDef { name, params, body, return_type } => {
                 self.emit(&format!(
-                    "fn {}({}) -> XeValue {{\n",
+                    "fn {}({}) -> {} {{\n",
                     Self::sanitize_name(name),
                     params
                         .iter()
-                        .map(|p| format!("mut {}: XeValue", Self::sanitize_name(p)))
+                        .map(|(p, ty)| {
+                            format!("mut {}: {}", Self::sanitize_name(p), ty.to_rust_type())
+                        })
                         .collect::<Vec<_>>()
-                        .join(", ")
+                        .join(", "),
+                    return_type.to_rust_type()
                 ));
                 self.indent_level += 1;
                 self.push_scope();
-                for param in params {
+                for (param, _) in params {
                     self.define_variable(param);
                 }
 
@@ -485,36 +498,42 @@ fn xe_set_global(name: &str, value: XeValue) -> XeValue {
 
                 let ends_with_return = body
                     .last()
-                    .map(|s| matches!(s.kind, StatementKind::Return { .. }))
+                    .map(|s| matches!(s.kind, TypedStatementKind::Return { .. }))
                     .unwrap_or(false);
                 if !ends_with_return {
                     self.emit_indent();
-                    self.emit("XeValue::Number(0.0)\n");
+                    match return_type {
+                        XeType::Number => self.emit("0.0\n"),
+                        XeType::Boolean => self.emit("false\n"),
+                        XeType::Text => self.emit("String::new()\n"),
+                        XeType::Void => self.emit("()\n"),
+                        _ => self.emit("XeValue::from(0.0).into()\n"),
+                    }
                 }
 
                 self.pop_scope();
                 self.indent_level -= 1;
                 self.emit("}\n");
             }
-            StatementKind::Return { value } => {
+            TypedStatementKind::Return { value } => {
                 self.emit_indent();
                 self.emit("return ");
                 if let Some(expr) = value {
+                    self.emit("(");
                     self.generate_expression(expr);
-                } else {
-                    self.emit("XeValue::Number(0.0)");
+                    self.emit(").into()");
                 }
                 self.emit(";\n");
             }
-            StatementKind::Break => {
+            TypedStatementKind::Break => {
                 self.emit_indent();
                 self.emit("break;\n");
             }
-            StatementKind::Continue => {
+            TypedStatementKind::Continue => {
                 self.emit_indent();
                 self.emit("continue;\n");
             }
-            StatementKind::Expression(expr) => {
+            TypedStatementKind::Expression(expr) => {
                 self.emit_indent();
                 self.generate_expression(expr);
                 self.emit(";\n");
@@ -522,280 +541,324 @@ fn xe_set_global(name: &str, value: XeValue) -> XeValue {
         }
     }
 
-    fn generate_condition(&mut self, expr: &Expression) {
-        match &expr.kind {
-            ExpressionKind::BinaryOp { left, op, right } => match op {
-                BinaryOperator::Equal => {
-                    self.emit("xe_eq(&");
-                    self.generate_expression(left);
-                    self.emit(", &");
-                    self.generate_expression(right);
-                    self.emit(")");
-                }
-                BinaryOperator::NotEqual => {
-                    self.emit("!xe_eq(&");
-                    self.generate_expression(left);
-                    self.emit(", &");
-                    self.generate_expression(right);
-                    self.emit(")");
-                }
-                BinaryOperator::Less => {
-                    self.emit("xe_lt(&");
-                    self.generate_expression(left);
-                    self.emit(", &");
-                    self.generate_expression(right);
-                    self.emit(")");
-                }
-                BinaryOperator::Greater => {
-                    self.emit("xe_gt(&");
-                    self.generate_expression(left);
-                    self.emit(", &");
-                    self.generate_expression(right);
-                    self.emit(")");
-                }
-                BinaryOperator::LessEqual => {
-                    self.emit("xe_le(&");
-                    self.generate_expression(left);
-                    self.emit(", &");
-                    self.generate_expression(right);
-                    self.emit(")");
-                }
-                BinaryOperator::GreaterEqual => {
-                    self.emit("xe_ge(&");
-                    self.generate_expression(left);
-                    self.emit(", &");
-                    self.generate_expression(right);
-                    self.emit(")");
-                }
-                BinaryOperator::And => {
-                    self.emit("(");
-                    self.generate_condition(left);
-                    self.emit(" && ");
-                    self.generate_condition(right);
-                    self.emit(")");
-                }
-                BinaryOperator::Or => {
-                    self.emit("(");
-                    self.generate_condition(left);
-                    self.emit(" || ");
-                    self.generate_condition(right);
-                    self.emit(")");
-                }
-                _ => {
-                    // For other binary ops, convert to bool
-                    self.emit("(");
+    fn generate_expression_with_coercion(&mut self, expr: &TypedExpression, target_ty: &XeType) {
+        if expr.ty == *target_ty {
+            self.generate_expression(expr);
+        } else {
+            match target_ty {
+                XeType::Number => {
+                    self.emit("(XeValue::from(");
                     self.generate_expression(expr);
-                    self.emit(").as_bool()");
+                    self.emit(").as_f64())");
                 }
-            },
-            ExpressionKind::UnaryOp { op, operand } if *op == UnaryOperator::Not => {
-                self.emit("!(");
-                self.generate_condition(operand);
-                self.emit(")");
-            }
-            ExpressionKind::Boolean(b) => {
-                self.emit(if *b { "true" } else { "false" });
-            }
-            _ => {
-                self.emit("(");
-                self.generate_expression(expr);
-                self.emit(").as_bool()");
+                XeType::Text => {
+                    self.emit("(XeValue::from(");
+                    self.generate_expression(expr);
+                    self.emit(").as_string())");
+                }
+                XeType::Boolean => {
+                    self.emit("(XeValue::from(");
+                    self.generate_expression(expr);
+                    self.emit(").as_bool())");
+                }
+                XeType::Unknown => {
+                    self.emit("XeValue::from(");
+                    self.generate_expression(expr);
+                    self.emit(")");
+                }
+                _ => self.generate_expression(expr),
             }
         }
     }
 
-    fn generate_expression(&mut self, expr: &Expression) {
+    fn generate_expression(&mut self, expr: &TypedExpression) {
         match &expr.kind {
-            ExpressionKind::Number(n) => {
-                self.emit(&format!("XeValue::Number({:?})", n));
+            TypedExpressionKind::Number(n) => {
+                self.emit(&format!("{:?}f64", n));
             }
-            ExpressionKind::String(s) => {
-                self.emit(&format!("XeValue::Text({:?}.to_string())", s));
+            TypedExpressionKind::String(s) => {
+                self.emit(&format!("{:?}.to_string()", s));
             }
-            ExpressionKind::Boolean(b) => {
-                self.emit(&format!("XeValue::Boolean({})", b));
+            TypedExpressionKind::Boolean(b) => {
+                self.emit(&format!("{}", b));
             }
-            ExpressionKind::List(elements) => {
-                self.emit("XeValue::List(vec![");
+            TypedExpressionKind::List(elements) => {
+                if let XeType::List(inner) = &expr.ty {
+                    if **inner != XeType::Unknown {
+                        self.emit("vec![");
+                        for (i, elem) in elements.iter().enumerate() {
+                            if i > 0 {
+                                self.emit(", ");
+                            }
+                            self.generate_expression(elem);
+                        }
+                        self.emit("]");
+                        return;
+                    }
+                }
+                
+                self.emit("vec![");
                 for (i, elem) in elements.iter().enumerate() {
                     if i > 0 {
                         self.emit(", ");
                     }
+                    self.emit("XeValue::from(");
                     self.generate_expression(elem);
+                    self.emit(")");
                 }
-                self.emit("])");
+                self.emit("]");
             }
-            ExpressionKind::Identifier(name) => {
+            TypedExpressionKind::Identifier(name) => {
                 let sanitized = Self::sanitize_name(name);
-                if self.is_variable_defined(name) && self.get_variable_scope_index(name) > 0 {
+                if self.is_variable_defined(name) {
                     self.emit(&format!("{}.clone()", sanitized));
                 } else {
-                    // Assume global if not local
-                    self.emit(&format!("xe_get_global(\"{}\")", sanitized));
+                    let rust_type = match expr.ty {
+                        XeType::Number => "val.as_f64()",
+                        XeType::Boolean => "val.as_bool()",
+                        XeType::Text => "val.as_string()",
+                        _ => "val",
+                    };
+                    self.emit(&format!("{{ let val = xe_get_global(\"{}\"); {} }}", sanitized, rust_type));
                 }
             }
-            ExpressionKind::BinaryOp { left, op, right } => match op {
-                BinaryOperator::Add => {
-                    self.emit("xe_add(");
+            TypedExpressionKind::BinaryOp { left, op, right } => {
+                let use_native = (left.ty == XeType::Number || right.ty == XeType::Number) || 
+                                 (left.ty == XeType::Boolean || right.ty == XeType::Boolean) ||
+                                 (left.ty == XeType::Text || right.ty == XeType::Text);
+                
+                if use_native {
+                    if expr.ty == XeType::Unknown {
+                        self.emit("XeValue::from(");
+                    }
+                    match op {
+                        BinaryOperator::Add => {
+                            if left.ty == XeType::Text || right.ty == XeType::Text {
+                                self.emit("String::from(xe_add_dynamic(XeValue::from(");
+                                self.generate_expression(left);
+                                self.emit("), XeValue::from(");
+                                self.generate_expression(right);
+                                self.emit(")))");
+                            } else {
+                                self.emit("(");
+                                self.generate_expression_with_coercion(left, &XeType::Number);
+                                self.emit(" + ");
+                                self.generate_expression_with_coercion(right, &XeType::Number);
+                                self.emit(")");
+                            }
+                        }
+                        BinaryOperator::Subtract => {
+                            self.emit("xe_sub_native(");
+                            self.generate_expression_with_coercion(left, &XeType::Number);
+                            self.emit(", ");
+                            self.generate_expression_with_coercion(right, &XeType::Number);
+                            self.emit(")");
+                        }
+                        BinaryOperator::Multiply => {
+                            self.emit("xe_mul_native(");
+                            self.generate_expression_with_coercion(left, &XeType::Number);
+                            self.emit(", ");
+                            self.generate_expression_with_coercion(right, &XeType::Number);
+                            self.emit(")");
+                        }
+                        BinaryOperator::Divide => {
+                            self.emit("xe_div_native(");
+                            self.generate_expression_with_coercion(left, &XeType::Number);
+                            self.emit(", ");
+                            self.generate_expression_with_coercion(right, &XeType::Number);
+                            self.emit(")");
+                        }
+                        BinaryOperator::Modulo => {
+                            self.emit("xe_mod_native(");
+                            self.generate_expression_with_coercion(left, &XeType::Number);
+                            self.emit(", ");
+                            self.generate_expression_with_coercion(right, &XeType::Number);
+                            self.emit(")");
+                        }
+                        BinaryOperator::Equal => {
+                            self.emit("xe_eq(&XeValue::from(");
+                            self.generate_expression(left);
+                            self.emit("), &XeValue::from(");
+                            self.generate_expression(right);
+                            self.emit("))");
+                        }
+                        BinaryOperator::NotEqual => {
+                            self.emit("!xe_eq(&XeValue::from(");
+                            self.generate_expression(left);
+                            self.emit("), &XeValue::from(");
+                            self.generate_expression(right);
+                            self.emit("))");
+                        }
+                        BinaryOperator::Less => {
+                            self.emit("(");
+                            self.generate_expression_with_coercion(left, &XeType::Number);
+                            self.emit(" < ");
+                            self.generate_expression_with_coercion(right, &XeType::Number);
+                            self.emit(")");
+                        }
+                        BinaryOperator::Greater => {
+                            self.emit("(");
+                            self.generate_expression_with_coercion(left, &XeType::Number);
+                            self.emit(" > ");
+                            self.generate_expression_with_coercion(right, &XeType::Number);
+                            self.emit(")");
+                        }
+                        BinaryOperator::LessEqual => {
+                            self.emit("(");
+                            self.generate_expression_with_coercion(left, &XeType::Number);
+                            self.emit(" <= ");
+                            self.generate_expression_with_coercion(right, &XeType::Number);
+                            self.emit(")");
+                        }
+                        BinaryOperator::GreaterEqual => {
+                            self.emit("(");
+                            self.generate_expression_with_coercion(left, &XeType::Number);
+                            self.emit(" >= ");
+                            self.generate_expression_with_coercion(right, &XeType::Number);
+                            self.emit(")");
+                        }
+                        BinaryOperator::And => {
+                            self.emit("(");
+                            self.generate_expression_with_coercion(left, &XeType::Boolean);
+                            self.emit(" && ");
+                            self.generate_expression_with_coercion(right, &XeType::Boolean);
+                            self.emit(")");
+                        }
+                        BinaryOperator::Or => {
+                            self.emit("(");
+                            self.generate_expression_with_coercion(left, &XeType::Boolean);
+                            self.emit(" || ");
+                            self.generate_expression_with_coercion(right, &XeType::Boolean);
+                            self.emit(")");
+                        }
+                    }
+                    if expr.ty == XeType::Unknown {
+                        self.emit(")");
+                    }
+                } else {
+                    self.emit("xe_add_dynamic(XeValue::from(");
                     self.generate_expression(left);
-                    self.emit(", ");
-                    self.generate_expression(right);
-                    self.emit(")");
-                }
-                BinaryOperator::Subtract => {
-                    self.emit("xe_sub(");
-                    self.generate_expression(left);
-                    self.emit(", ");
-                    self.generate_expression(right);
-                    self.emit(")");
-                }
-                BinaryOperator::Multiply => {
-                    self.emit("xe_mul(");
-                    self.generate_expression(left);
-                    self.emit(", ");
-                    self.generate_expression(right);
-                    self.emit(")");
-                }
-                BinaryOperator::Divide => {
-                    self.emit("xe_div(");
-                    self.generate_expression(left);
-                    self.emit(", ");
-                    self.generate_expression(right);
-                    self.emit(")");
-                }
-                BinaryOperator::Modulo => {
-                    self.emit("xe_mod(");
-                    self.generate_expression(left);
-                    self.emit(", ");
-                    self.generate_expression(right);
-                    self.emit(")");
-                }
-                BinaryOperator::Equal => {
-                    self.emit("XeValue::Boolean(xe_eq(&");
-                    self.generate_expression(left);
-                    self.emit(", &");
+                    self.emit("), XeValue::from(");
                     self.generate_expression(right);
                     self.emit("))");
+                    if expr.ty != XeType::Unknown {
+                        match expr.ty {
+                            XeType::Number => self.emit(".as_f64()"),
+                            XeType::Boolean => self.emit(".as_bool()"),
+                            XeType::Text => self.emit(".as_string()"),
+                            _ => {}
+                        }
+                    }
                 }
-                BinaryOperator::NotEqual => {
-                    self.emit("XeValue::Boolean(!xe_eq(&");
-                    self.generate_expression(left);
-                    self.emit(", &");
-                    self.generate_expression(right);
-                    self.emit("))");
-                }
-                BinaryOperator::Less => {
-                    self.emit("XeValue::Boolean(xe_lt(&");
-                    self.generate_expression(left);
-                    self.emit(", &");
-                    self.generate_expression(right);
-                    self.emit("))");
-                }
-                BinaryOperator::Greater => {
-                    self.emit("XeValue::Boolean(xe_gt(&");
-                    self.generate_expression(left);
-                    self.emit(", &");
-                    self.generate_expression(right);
-                    self.emit("))");
-                }
-                BinaryOperator::LessEqual => {
-                    self.emit("XeValue::Boolean(xe_le(&");
-                    self.generate_expression(left);
-                    self.emit(", &");
-                    self.generate_expression(right);
-                    self.emit("))");
-                }
-                BinaryOperator::GreaterEqual => {
-                    self.emit("XeValue::Boolean(xe_ge(&");
-                    self.generate_expression(left);
-                    self.emit(", &");
-                    self.generate_expression(right);
-                    self.emit("))");
-                }
-                BinaryOperator::And => {
-                    self.emit("XeValue::Boolean(");
-                    self.generate_condition(left);
-                    self.emit(" && ");
-                    self.generate_condition(right);
-                    self.emit(")");
-                }
-                BinaryOperator::Or => {
-                    self.emit("XeValue::Boolean(");
-                    self.generate_condition(left);
-                    self.emit(" || ");
-                    self.generate_condition(right);
-                    self.emit(")");
-                }
-            },
-            ExpressionKind::UnaryOp { op, operand } => match op {
+            }
+            TypedExpressionKind::UnaryOp { op, operand } => match op {
                 UnaryOperator::Negate => {
-                    self.emit("XeValue::Number(-xe_expect_number(&");
-                    self.generate_expression(operand);
-                    self.emit(", \"unary '-'\"))");
+                    self.emit("-(");
+                    self.generate_expression_with_coercion(operand, &XeType::Number);
+                    self.emit(")");
                 }
                 UnaryOperator::Not => {
-                    self.emit("XeValue::Boolean(!(");
-                    self.generate_expression(operand);
-                    self.emit(").as_bool())");
+                    self.emit("!(");
+                    self.generate_expression_with_coercion(operand, &XeType::Boolean);
+                    self.emit(")");
                 }
             },
-            ExpressionKind::FunctionCall { name, args } => {
+            TypedExpressionKind::FunctionCall { name, args } => {
                 match name.as_str() {
                     "print" => {
-                        self.emit("{ xe_builtin_print(vec![");
+                        self.emit("xe_builtin_print(vec![");
                         for (i, arg) in args.iter().enumerate() {
                             if i > 0 {
                                 self.emit(", ");
                             }
+                            self.emit("XeValue::from(");
                             self.generate_expression(arg);
+                            self.emit(")");
                         }
-                        self.emit("]); XeValue::Number(0.0) }");
+                        self.emit("])");
                     }
                     "input" => {
                         self.emit("xe_builtin_input(&");
                         if !args.is_empty() {
-                            self.generate_expression(&args[0]);
+                            self.generate_expression_with_coercion(&args[0], &XeType::Text);
                         } else {
-                            self.emit("XeValue::Text(String::new())");
+                            self.emit("String::new()");
                         }
                         self.emit(")");
                     }
                     "length" => {
-                        self.emit("xe_builtin_length(&");
+                        self.emit("xe_builtin_length(&XeValue::from(");
                         self.generate_expression(&args[0]);
-                        self.emit(")");
+                        self.emit("))");
                     }
                     "type" => {
-                        self.emit("xe_builtin_type(&");
+                        self.emit("xe_builtin_type(&XeValue::from(");
                         self.generate_expression(&args[0]);
-                        self.emit(")");
+                        self.emit("))");
                     }
                     "convert" => {
-                        self.emit("xe_builtin_convert(&");
+                        self.emit("xe_builtin_convert(&XeValue::from(");
                         self.generate_expression(&args[0]);
-                        self.emit(", &");
-                        self.generate_expression(&args[1]);
+                        self.emit("), &");
+                        self.generate_expression_with_coercion(&args[1], &XeType::Text);
                         self.emit(")");
                     }
                     _ => {
-                        // User-defined function
                         self.emit(&format!("{}(", Self::sanitize_name(name)));
                         for (i, arg) in args.iter().enumerate() {
                             if i > 0 {
                                 self.emit(", ");
                             }
+                            self.emit("XeValue::from(");
                             self.generate_expression(arg);
+                            self.emit(").into()");
                         }
                         self.emit(")");
                     }
                 }
             }
-            ExpressionKind::Index { object, index } => {
-                self.emit("xe_index(&");
+            TypedExpressionKind::Index { object, index } => {
+                if let XeType::List(inner) = &object.ty {
+                    if **inner != XeType::Unknown {
+                        self.emit("((");
+                        self.generate_expression(object);
+                        self.emit(")[xe_index_check(");
+                        self.generate_expression_with_coercion(index, &XeType::Number);
+                        self.emit(")].clone())");
+                        return;
+                    }
+                }
+                
+                self.emit("xe_index(&XeValue::from(");
                 self.generate_expression(object);
-                self.emit(", &");
-                self.generate_expression(index);
+                self.emit("), ");
+                self.generate_expression_with_coercion(index, &XeType::Number);
                 self.emit(")");
+            }
+            TypedExpressionKind::Wrap(expr) => {
+                self.emit("XeValue::from(");
+                self.generate_expression(expr);
+                self.emit(")");
+            }
+            TypedExpressionKind::Unwrap(expr, ty) => {
+                match ty {
+                    XeType::Number => {
+                        self.emit("(XeValue::from(");
+                        self.generate_expression(expr);
+                        self.emit(").as_f64())");
+                    }
+                    XeType::Boolean => {
+                        self.emit("(XeValue::from(");
+                        self.generate_expression(expr);
+                        self.emit(").as_bool())");
+                    }
+                    XeType::Text => {
+                        self.emit("(XeValue::from(");
+                        self.generate_expression(expr);
+                        self.emit(").as_string())");
+                    }
+                    _ => self.generate_expression(expr),
+                }
             }
         }
     }
@@ -828,17 +891,7 @@ fn xe_set_global(name: &str, value: XeValue) -> XeValue {
         self.scopes.iter().rev().any(|scope| scope.contains(name))
     }
 
-    fn get_variable_scope_index(&self, name: &str) -> usize {
-        for (i, scope) in self.scopes.iter().enumerate().rev() {
-            if scope.contains(name) {
-                return i;
-            }
-        }
-        0
-    }
-
     fn sanitize_name(name: &str) -> String {
-        // Prefix with xe_ to avoid Rust keyword conflicts
         match name {
             "type" | "fn" | "let" | "mut" | "if" | "else" | "for" | "while" | "loop" | "match"
             | "return" | "break" | "continue" | "struct" | "enum" | "impl" | "trait" | "pub"
