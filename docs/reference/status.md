@@ -1,6 +1,6 @@
 # Project Status
 
-XE is in **pre-alpha** (v0.1.3). While the compiler is stable enough for experimentation and learning, it is not yet intended for production use.
+XE is in **pre-alpha** (v0.1.3+1). While the compiler is stable enough for experimentation and learning, it is not yet intended for production use.
 
 ## Current Capabilities
 
