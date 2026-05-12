@@ -263,7 +263,7 @@ print(x + y)
 **Conditional**
 
 ```xe
-age = input("Enter age:")
+age = input("Enter age: ")
 age = convert(age, "number")
 if age >= 18:
     print("Adult")
@@ -271,6 +271,31 @@ elif age >= 13:
     print("Teen")
 else:
     print("Minor")
+```
+
+**Interactive To-Do List**
+
+```xe
+tasks = []
+running = true
+while running:
+    print("You have " + convert(length(tasks), "text") + " task(s)")
+    item = input("Add task (or 'q' to quit): ")
+    if item == "q":
+        running = false
+    else:
+        tasks = tasks + [item]
+```
+
+**Text Adventure Game**
+
+```xe
+print("You are in a dark forest.")
+choice = input("Go North or South? ")
+if choice == "North":
+    print("You found a treasure!")
+else:
+    print("You were eaten by a grue.")
 ```
 
 ---

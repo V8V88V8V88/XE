@@ -1,0 +1,19 @@
+# Multiplication Table Generator
+# Generates a grid for numbers 1 to N.
+
+size_text = input("Enter table size (e.g., 10): ")
+size = convert(size_text, "number")
+
+print("--- Multiplication Table ---")
+
+y = 1
+while y <= size:
+    row = ""
+    x = 1
+    while x <= size:
+        val = x * y
+        # Simple padding: add a space
+        row = row + convert(val, "text") + " "
+        x = x + 1
+    print(row)
+    y = y + 1

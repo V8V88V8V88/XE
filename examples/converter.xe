@@ -1,0 +1,33 @@
+# XE Unit Converter
+# Demonstrates math, conditionals, and type conversion.
+
+print("--- XE Unit Converter ---")
+
+running = true
+while running:
+    print("")
+    print("1. Celsius to Fahrenheit")
+    print("2. Kilometers to Miles")
+    print("3. Quit")
+    
+    choice = input("Select a conversion: ")
+    
+    if choice == "1":
+        c_text = input("Enter temperature in Celsius: ")
+        c = convert(c_text, "number")
+        f = (c * 9 / 5) + 32
+        print(c_text + " C is " + convert(f, "text") + " F")
+        
+    elif choice == "2":
+        km_text = input("Enter distance in Kilometers: ")
+        km = convert(km_text, "number")
+        mi = km * 0.621371
+        print(km_text + " km is approximately " + convert(mi, "text") + " miles")
+        
+    elif choice == "3":
+        running = false
+        
+    else:
+        print("Invalid option.")
+
+print("Goodbye!")

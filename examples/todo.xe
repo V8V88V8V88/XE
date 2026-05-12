@@ -1,0 +1,37 @@
+# XE To-Do List Manager
+# Demonstrates list usage, loops, and user input.
+
+tasks = []
+print("--- XE To-Do List Manager ---")
+
+running = true
+while running:
+    print("")
+    print("You have " + convert(length(tasks), "text") + " task(s):")
+    
+    if length(tasks) == 0:
+        print("(None)")
+    else:
+        for t in tasks:
+            print("- " + t)
+    
+    print("")
+    print("1. Add task")
+    print("2. Clear all")
+    print("3. Exit")
+    
+    choice = input("Choose an option: ")
+    
+    if choice == "1":
+        new_task = input("What needs to be done? ")
+        tasks = tasks + [new_task]
+        print("Task added!")
+    elif choice == "2":
+        tasks = []
+        print("List cleared.")
+    elif choice == "3":
+        running = false
+    else:
+        print("Invalid choice, try again.")
+
+print("Goodbye!")

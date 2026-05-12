@@ -1,0 +1,23 @@
+# Prime Number Checker
+# Finds all prime numbers up to a given limit.
+
+limit_text = input("Enter a limit to find primes: ")
+limit = convert(limit_text, "number")
+
+print("Prime numbers up to " + limit_text + ":")
+
+n = 2
+while n <= limit:
+    is_prime = true
+    d = 2
+    # Check if n is divisible by any d from 2 to sqrt(n)
+    # Since we don't have sqrt, we use d * d <= n
+    while d * d <= n:
+        if n % d == 0:
+            is_prime = false
+        d = d + 1
+    
+    if is_prime:
+        print(n)
+    
+    n = n + 1

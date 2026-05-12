@@ -1,0 +1,21 @@
+# Palindrome Checker in XE
+# Checks if a word reads the same forwards and backwards.
+
+print("--- Palindrome Checker ---")
+word = input("Enter a word: ")
+
+# Reverse the word using a loop
+reversed_word = ""
+length_word = length(word)
+
+i = length_word - 1
+while i >= 0:
+    reversed_word = reversed_word + word[i]
+    i = i - 1
+
+print("Reversed: " + reversed_word)
+
+if word == reversed_word:
+    print("Yes, '" + word + "' is a palindrome!")
+else:
+    print("No, '" + word + "' is not a palindrome.")

@@ -1,0 +1,33 @@
+# Student Grade System
+# Calculates average grade and determines pass/fail.
+
+print("--- XE Grade System ---")
+
+student_name = input("Student Name: ")
+num_subjects_text = input("Number of subjects: ")
+num_subjects = convert(num_subjects_text, "number")
+
+grades = []
+total = 0
+
+i = 0
+while i < num_subjects:
+    prompt = "Grade for subject " + convert(i + 1, "text") + ": "
+    grade_text = input(prompt)
+    grade = convert(grade_text, "number")
+    grades = grades + [grade]
+    total = total + grade
+    i = i + 1
+
+if num_subjects > 0:
+    average = total / num_subjects
+    print("")
+    print("Student: " + student_name)
+    print("Average: " + convert(average, "text"))
+
+    if average >= 50:
+        print("Status: PASSED")
+    else:
+        print("Status: FAILED")
+else:
+    print("No subjects entered.")

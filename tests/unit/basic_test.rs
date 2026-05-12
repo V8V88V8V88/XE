@@ -30,6 +30,10 @@ fn compile_xe(source: &str) -> Result<String, String> {
 }
 
 fn run_xe(source: &str) -> Result<String, String> {
+    run_xe_with_input(source, "")
+}
+
+fn run_xe_with_input(source: &str, input: &str) -> Result<String, String> {
     let id = get_unique_id();
     let temp_dir = std::env::temp_dir().join(format!("xe_test_{}", id));
     let _ = fs::create_dir_all(&temp_dir);
@@ -37,11 +41,21 @@ fn run_xe(source: &str) -> Result<String, String> {
     let xe_file = temp_dir.join("input.xe");
     fs::write(&xe_file, source).map_err(|e| e.to_string())?;
 
-    let output = Command::new(env!("CARGO_BIN_EXE_xe"))
+    use std::io::Write;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_xe"))
         .arg("run")
         .arg(&xe_file)
-        .output()
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
         .map_err(|e| e.to_string())?;
+
+    let mut stdin = child.stdin.take().expect("Failed to open stdin");
+    stdin.write_all(input.as_bytes()).map_err(|e| e.to_string())?;
+    drop(stdin);
+
+    let output = child.wait_with_output().map_err(|e| e.to_string())?;
 
     let _ = fs::remove_dir_all(&temp_dir);
 
@@ -474,6 +488,37 @@ print(length(items))
     )
     .unwrap();
     assert_eq!(output.trim(), "3");
+}
+
+#[test]
+fn test_list_concatenation() {
+    let output = run_xe(
+        r#"
+items = [1, 2]
+items = items + [3, 4]
+print(length(items))
+for i in items:
+    print(i)
+"#,
+    )
+    .unwrap();
+    assert_eq!(output.trim(), "4\n1\n2\n3\n4");
+}
+
+#[test]
+fn test_list_concatenation_mixed() {
+    let output = run_xe(
+        r#"
+tasks = []
+tasks = tasks + ["buy milk"]
+tasks = tasks + ["clean room"]
+print(length(tasks))
+for t in tasks:
+    print(t)
+"#,
+    )
+    .unwrap();
+    assert_eq!(output.trim(), "2\nbuy milk\nclean room");
 }
 
 #[test]
@@ -1057,4 +1102,61 @@ import a
 
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("circular import detected"));
+}
+
+#[test]
+fn test_palindrome_checker() {
+    let source = fs::read_to_string("examples/palindrome.xe").unwrap();
+    let output = run_xe_with_input(&source, "racecar\n").unwrap();
+    assert!(output.contains("Yes, 'racecar' is a palindrome!"));
+    
+    let output = run_xe_with_input(&source, "hello\n").unwrap();
+    assert!(output.contains("No, 'hello' is not a palindrome."));
+}
+
+#[test]
+fn test_prime_numbers() {
+    let source = fs::read_to_string("examples/prime_numbers.xe").unwrap();
+    let output = run_xe_with_input(&source, "10\n").unwrap();
+    assert!(output.contains("2\n3\n5\n7"));
+}
+
+#[test]
+fn test_multiplication_table() {
+    let source = fs::read_to_string("examples/multiplication_table.xe").unwrap();
+    let output = run_xe_with_input(&source, "3\n").unwrap();
+    assert!(output.contains("1 2 3 \n2 4 6 \n3 6 9 "));
+}
+
+#[test]
+fn test_grade_system() {
+    let source = fs::read_to_string("examples/grades.xe").unwrap();
+    let output = run_xe_with_input(&source, "Alice\n2\n80\n90\n").unwrap();
+    assert!(output.contains("Student: Alice"));
+    assert!(output.contains("Average: 85"));
+    assert!(output.contains("Status: PASSED"));
+}
+
+#[test]
+fn test_todo_list() {
+    let source = fs::read_to_string("examples/todo.xe").unwrap();
+    let output = run_xe_with_input(&source, "1\nbuy milk\n1\nclean room\n3\n").unwrap();
+    assert!(output.contains("- buy milk"));
+    assert!(output.contains("- clean room"));
+    assert!(output.contains("You have 2 task(s)"));
+}
+
+#[test]
+fn test_adventure_game() {
+    let source = fs::read_to_string("examples/adventure.xe").unwrap();
+    let output = run_xe_with_input(&source, "2\n1\n").unwrap();
+    assert!(output.contains("You find a shiny gold coin"));
+    assert!(output.contains("YOU WIN!"));
+}
+
+#[test]
+fn test_unit_converter() {
+    let source = fs::read_to_string("examples/converter.xe").unwrap();
+    let output = run_xe_with_input(&source, "1\n100\n3\n").unwrap();
+    assert!(output.contains("100 C is 212 F"));
 }

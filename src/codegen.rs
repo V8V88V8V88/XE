@@ -144,6 +144,16 @@ impl XeValue {
         self.to_string()
     }
 
+    fn as_list(&self) -> Vec<XeValue> {
+        match self {
+            XeValue::List(l) => l.clone(),
+            _ => xe_runtime_error(&format!(
+                "expected list, got {}",
+                self.type_name()
+            )),
+        }
+    }
+
     fn type_name(&self) -> &'static str {
         match self {
             XeValue::Number(_) => "number",
@@ -742,10 +752,18 @@ fn xe_set_global(name: &str, value: XeValue) -> XeValue {
                     self.generate_expression(right);
                     self.emit("))");
                     if expr.ty != XeType::Unknown {
-                        match expr.ty {
+                        match &expr.ty {
                             XeType::Number => self.emit(".as_f64()"),
                             XeType::Boolean => self.emit(".as_bool()"),
                             XeType::Text => self.emit(".as_string()"),
+                            XeType::List(inner) => {
+                                match **inner {
+                                    XeType::Number => self.emit(".as_list().into_iter().map(|v| v.as_f64()).collect()"),
+                                    XeType::Boolean => self.emit(".as_list().into_iter().map(|v| v.as_bool()).collect()"),
+                                    XeType::Text => self.emit(".as_list().into_iter().map(|v| v.as_string()).collect()"),
+                                    _ => self.emit(".as_list()"),
+                                }
+                            }
                             _ => {}
                         }
                     }

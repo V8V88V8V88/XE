@@ -1,0 +1,41 @@
+# Simple Calculator in XE
+
+print("Welcome to the XE Calculator!")
+print("Type 'q' as the first number to quit.")
+
+running = true
+while running:
+    print("")
+    num1_text = input("First number: ")
+    
+    if num1_text == "q":
+        running = false
+    else:
+        num1 = convert(num1_text, "number")
+        op = input("Operator (+, -, *, /, %): ")
+        num2_text = input("Second number: ")
+        num2 = convert(num2_text, "number")
+        
+        if op == "+":
+            result = num1 + num2
+            print("Result: " + convert(result, "text"))
+        elif op == "-":
+            result = num1 - num2
+            print("Result: " + convert(result, "text"))
+        elif op == "*":
+            result = num1 * num2
+            print("Result: " + convert(result, "text"))
+        elif op == "/":
+            if num2 == 0:
+                print("Error: Division by zero!")
+            else:
+                result = num1 / num2
+                print("Result: " + convert(result, "text"))
+        elif op == "%":
+            # Calculate num1 percent of num2
+            result = (num1 / 100) * num2
+            print("Result: " + convert(result, "text"))
+        else:
+            print("Error: Unknown operator '" + op + "'")
+
+print("Thanks for using XE Calculator!")
