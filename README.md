@@ -1,345 +1,230 @@
 <div align="center">
-<img src="./XElogo.png" width="120">
+  <img src="./XElogo.png" alt="XE Programming Language" width="120" />
+  <h1>The XE Programming Language</h1>
+  <p><strong>A fast, indentation-based programming language compiling to standalone native machine code via Rust.</strong></p>
 
-# XE Programming Language
+  <p>
+    <a href="https://xe-lang.vercel.app">Website</a> •
+    <a href="https://xe-lang.vercel.app/docs">Documentation</a> •
+    <a href="https://xe-lang.vercel.app/docs/guide/getting-started">Getting Started</a> •
+    <a href="https://github.com/v8v88v8v88/XE/releases">Changelog</a> •
+    <a href="https://github.com/v8v88v8v88/XE/issues">Issues</a>
+  </p>
+
+  <p>
+    <a href="https://github.com/v8v88v8v88/XE/releases/latest"><img src="https://img.shields.io/github/v/release/v8v88v8v88/XE?style=flat-square&color=blue" alt="Latest Release" /></a>
+    <a href="https://github.com/v8v88v8v88/XE/actions"><img src="https://img.shields.io/github/actions/workflow/status/v8v88v8v88/XE/ci.yml?branch=main&style=flat-square" alt="CI Status" /></a>
+    <a href="https://github.com/v8v88v8v88/XE/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0-blue?style=flat-square" alt="License" /></a>
+    <a href="https://xe-lang.vercel.app"><img src="https://img.shields.io/badge/docs-xe--lang.vercel.app-green?style=flat-square" alt="Documentation" /></a>
+  </p>
 </div>
-
-XE is a small programming language that compiles into Rust source code and then into a native executable through `rustc`. Its syntax is indentation-based and intentionally compact so the compiler pipeline stays easy to study.
-
-This is a hobby and learning project. Do not use it in production. It is meant for people who want to see how a simple language and compiler are built.
 
 ---
 
 ## What is XE?
 
-XE is a **source-to-source** language. That means:
+**XE** is an expressive, indentation-based programming language built for developers who want the clean readability of Python with the execution speed and standalone binary output of native code. 
 
-1. You write a `.xe` file (XE source code).
-2. The XE compiler reads it and outputs Rust source code.
-3. You (or the tooling) run the Rust compiler on that code to get an executable.
+XE compiles source files directly to optimized Rust, leveraging `rustc` and LLVM for native code generation, zero-overhead memory management, and cross-platform compilation.
 
-So XE does not run your code directly. It translates it to Rust and lets Rust handle the final native build. You get:
+```xe
+# Quick look at XE syntax
+fun fibonacci(n):
+    if n <= 1:
+        return n
+    return fibonacci(n - 1) + fibonacci(n - 2)
 
-- **Simple syntax** – English-like, Python-style, so it is easy to read.
-- **Native build output** – XE can produce a standalone executable through Rust.
-- **A compact compiler codebase** – lexer, parser, semantic checks, and code generation are all easy to inspect.
+fun main():
+    limit = 10
+    print("Fibonacci sequence up to", limit)
+    
+    for i in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]:
+        print("fib(" + convert(i, "text") + ") =", fibonacci(i))
 
----
-
-## Why XE?
-
-XE is primarily a compiler project:
-
-- It gives you a small language to experiment with.
-- It shows a complete frontend-to-codegen pipeline.
-- It produces native binaries instead of interpreting the source directly.
-
-The main goal is clarity and implementation quality, not feature count.
+main()
+```
 
 ---
 
-## Benefits
+## Key Features
 
-- **Readable syntax** – indentation-based and easy to follow in examples.
-- **Native executables** – XE uses `rustc` to build platform binaries.
-- **Clear structure** – lexer, parser, semantic analysis, and code generation are separated cleanly.
-- **Useful diagnostics** – compiler errors include line/column context and a caret marker.
-- **Multi-file programs** – XE modules can import other XE files and compile into one native binary.
-- **Good for learning** – the codebase is small enough to understand without a large framework.
+- **Native Performance**: Compiles down to native machine code via Rust with zero interpreter overhead.
+- **Pythonic Syntax**: Clean indentation-based block syntax (`fun`, `if`, `elif`, `else`, `while`, `for`, `repeat`).
+- **Hybrid Typed IR**: Automatically infers and uses native unboxed types (`f64`, `bool`, `String`, vector slices) for maximum throughput.
+- **Multi-File Modules**: Seamless project organization with relative imports (`import math_utils`, `from helpers import format_name`).
+- **Lexical Scoping**: Function-local variables, parameter shadowing, and global state management.
+- **Rich Diagnostics**: Actionable compiler errors with exact source line snippets and column caret pointers.
+- **Built-in CLI**: Single tool for running, compiling, installing, and self-updating.
 
 ---
 
-## How it works (the pipeline)
+## Installation
 
-When you run the XE compiler on your source, it follows this transformation process:
+### Quick Install (Linux / macOS)
+
+```bash
+curl -fsSL https://xe-lang.vercel.app/install.sh | bash
+```
+
+To install to a custom directory:
+```bash
+XE_INSTALL_DIR="$HOME/bin" curl -fsSL https://xe-lang.vercel.app/install.sh | bash
+```
+
+### Build from Source
+
+**Prerequisites:** [Rust toolchain](https://rustup.rs/) (`rustc` & `cargo` 1.70+).
+
+```bash
+git clone https://github.com/V8V88V8V88/XE.git
+cd XE
+cargo build --release
+
+# Install binary to ~/.local/bin
+./target/release/xe install
+```
+
+---
+
+## Quick Start
+
+| Command | Description |
+| :--- | :--- |
+| `xe run <file.xe>` | Compile and execute an XE program immediately |
+| `xe compile <file.xe> -o <binary>` | Build an optimized standalone native binary |
+| `xe compile <file.xe>` | Emit generated Rust source code to `stdout` |
+| `xe update` | Check for and install the latest compiler release |
+| `xe --version` | Display compiler version |
+
+```bash
+# Run a single file
+xe run examples/hello.xe
+
+# Compile to an optimized binary
+xe compile examples/adventure.xe -o adventure
+./adventure
+
+# Run a multi-module program
+xe run examples/modules/main.xe
+```
+
+---
+
+## Architecture & Pipeline
 
 ```mermaid
 graph LR
-    Source[".xe Source"] --> Lexer["Lexical Analysis (Tokens)"]
-    Lexer --> Parser["Syntactic Analysis (AST)"]
-    Parser --> Semantic["Semantic Validation"]
-    Semantic --> RustGen["Rust Code Generation"]
-    RustGen --> rustc["rustc (Optimization & Native Build)"]
-    rustc --> Binary["Native Machine Binary"]
+    Source[".xe Source"] --> Lexer["Lexer\n(Tokens)"]
+    Lexer --> Parser["Parser\n(AST)"]
+    Parser --> Semantic["Semantic Analyzer\n(Type & Scope Checking)"]
+    Semantic --> IR["Typed IR\n(Hybrid Inference)"]
+    IR --> Codegen["Rust Code Generator"]
+    Codegen --> Rustc["rustc Backend\n(Native Machine Code)"]
+    Rustc --> Binary["Standalone Binary"]
 ```
 
-1. **Lexer** – Splits your source code into tokens (words, numbers, symbols).
-2. **Parser** – Checks that the tokens form valid sentences (syntax) and builds a tree (AST).
-3. **AST (Abstract Syntax Tree)** – A tree that represents the structure of your program.
-4. **Semantic validation** – Checks names, function calls, loop control, and other structural rules.
-5. **Rust code generator** – Writes safe Rust code that does what your XE program says.
-6. **Rust compiler (rustc)** – Compiles that Rust code into an executable.
-
-So: XE source → Lexer → Parser → AST → Semantic check → Rust code → rustc → executable.
+1. **Lexer (`lexer.rs`)**: Scans tokens, indentation levels, and source spans.
+2. **Parser (`parser.rs`)**: Validates grammar and builds the Abstract Syntax Tree (AST).
+3. **Semantic Analyzer (`semantic.rs`)**: Enforces variable definitions, module boundaries, and control flow rules.
+4. **Compiler Linker (`compiler.rs`)**: Resolves module dependency graphs and rewrites lexical scopes.
+5. **Codegen (`codegen.rs`)**: Infers native types and generates optimized Rust prelude and functions.
+6. **Backend (`rustc`)**: Compiles generated Rust directly to native platform binaries.
 
 ---
 
-## Documentation
+## Language Overview
 
-The project now uses a standard docs site inside `docs/`:
+### Variables & Data Types
+```xe
+name = "XE"           # Text (String)
+version = 0.1         # Number (f64)
+is_fast = true        # Boolean (bool)
+items = [1, 2, 3, 4]  # List
+```
 
-- **Main entry:** `docs/index.md`
-- **Guides:** Getting started, Language basics, Examples.
-- **References:** CLI, Language, Status.
+### Control Flow
+```xe
+# If / Elif / Else
+if score >= 90:
+    print("Grade: A")
+elif score >= 80:
+    print("Grade: B")
+else:
+    print("Grade: C")
 
-You can run the docs locally:
+# For Loops (Lists & Strings)
+for item in [10, 20, 30]:
+    print(item)
 
+for ch in "XE":
+    print(ch)
+
+# While & Repeat Loops
+while count > 0:
+    count = count - 1
+
+repeat 5 times:
+    print("Hello!")
+```
+
+### Functions & Modules
+```xe
+# File: math_utils.xe
+fun square(x):
+    return x * x
+
+# File: main.xe
+from math_utils import square
+
+print("5 squared is", square(5))
+```
+
+---
+
+## Performance Benchmark
+
+A reproducible benchmark comparing XE with CPython on a recursive Fibonacci workload:
+
+```bash
+python3 examples/benchmark.py
+```
+
+Because XE compiles down to native machine code via `rustc`, recursive and computational algorithms run with native CPU speed.
+
+---
+
+## Testing
+
+```bash
+# Run the full automated test suite (75 tests)
+cargo test
+
+# Run linter checks
+cargo clippy --all-targets --all-features
+```
+
+To view or build the documentation locally:
 ```bash
 cd docs
 npm install
 npm run docs:dev
 ```
 
-*(You can also build the docs using `npm run docs:build`.)*
-
 ---
 
-## Getting Started
-
-### 1. Prerequisites
-You must have the **[Rust toolchain](https://rustup.rs/)** (`cargo` and `rustc`) installed.
-
-### 2. Build the Compiler
-```bash
-git clone https://github.com/V8V88V8V88/XE.git
-cd XE
-cargo build --release
-```
-The compiler binary will be created in Cargo's release output directory.
-
-To install that built binary into `~/.local/bin`, run:
-
-```bash
-./target/release/xe install
-```
-
-If `~/.local/bin` is not already in your `PATH`, add it before using `xe` directly.
-
-*Note: For macOS users, follow the same steps above to build a native binary for Apple Silicon or Intel Macs.*
-
----
-
-## Usage
-
-### Run an XE program
-Compiles and executes the program in one step.
-```bash
-xe run examples/hello.xe
-```
-
-### Compile to a Native Binary
-Produces a standalone executable.
-```bash
-xe compile examples/hello.xe -o hello
-./hello
-```
-
-### Print the Generated Rust
-Emits the Rust source XE generates to standard output.
-```bash
-xe compile examples/hello.xe
-```
-
-### Run a Multi-File XE Program
-Imports are resolved relative to the importing `.xe` file, and both `run` and `compile` link the full XE module graph before generating Rust.
-```bash
-xe run examples/modules/main.xe
-```
-
----
-
-## Benchmark
-
-The repository includes a reproducible benchmark that compares XE with CPython on the same recursive Fibonacci workload:
-
-```bash
-python3 examples/benchmark.py
-```
-
-The script:
-
-- builds the XE compiler in release mode if needed
-- compiles `examples/benchmark.xe` into a native binary
-- runs both implementations multiple times
-- prints the mean runtime and the Python/XE speedup ratio
-
-Use the script output for screenshots or performance notes, because the exact numbers depend on your machine.
-
----
-
-## Verification
-
-To run the full automated compiler and CLI test suite:
-
-```bash
-cargo test -- --nocapture
-```
-
-At the time of writing, this runs **58 automated tests** covering parsing, imports, control flow, functions, runtime errors, binary generation, and installer behavior.
-
-You can also verify the documentation build with:
-
-```bash
-cd docs
-npm install
-npm run docs:build
-```
-
----
-
-## What you can write in XE
-
-**Data types**
-
-- **Number** – Integers and decimals.
-- **Text** – Strings.
-- **Boolean** – True and false.
-- **List** – An ordered list of values.
-
-XE uses an **inferred type system** with a **Typed IR**. The compiler tries to map variables to native Rust types (`f64`, `bool`, `String`) for performance, falling back to a dynamic `XeValue` box only when types are mixed or unknown.
-
-**Control flow**
-
-- `if` / `elif` / `else` – Branch on a condition.
-- `repeat N times` – Loop a fixed number of times.
-- `while` – Loop while a condition stays true.
-- `for item in iterable` – Iterate over lists and text.
-- `break` / `continue` – Control loop execution.
-
-**Functions**
-
-You can define functions, e.g.:
-
-```xe
-fun greet(name):
-    print("Hello " + name)
-```
-
-Functions can access their parameters, local variables, and **global module-level variables**. They do not yet support nested closures (capturing locals from an outer function).
-
-**Modules**
-
-XE can split code across multiple files:
-
-```xe
-from math_utils import double
-print(double(21))
-```
-
-Current module rules:
-
-- `import module_name` loads another `.xe` file and brings its top-level functions into scope.
-- `from module_name import name` imports selected top-level functions.
-- imports are resolved relative to the importing file.
-- imports must appear before executable top-level statements.
-- imported module top-level code runs once before the entry module starts executing.
-
-**Built-in functions**
-
-- `print()` – Print to the screen.
-- `input()` – Read input from the user.
-- `length()` – Length of text or a list.
-- `type()` – Get the type of a value.
-- `convert()` – Convert between `number`, `text`, and `boolean`.
-
----
-
-## Example programs
-
-**Hello World**
-
-```xe
-print("Hello, World!")
-```
-
-**Numbers**
-
-```xe
-x = 10
-y = 20
-print(x + y)
-```
-
-**Conditional**
-
-```xe
-age = input("Enter age: ")
-age = convert(age, "number")
-if age >= 18:
-    print("Adult")
-elif age >= 13:
-    print("Teen")
-else:
-    print("Minor")
-```
-
-**Interactive To-Do List**
-
-```xe
-tasks = []
-running = true
-while running:
-    print("You have " + convert(length(tasks), "text") + " task(s)")
-    item = input("Add task (or 'q' to quit): ")
-    if item == "q":
-        running = false
-    else:
-        tasks = tasks + [item]
-```
-
-**Text Adventure Game**
-
-```xe
-print("You are in a dark forest.")
-choice = input("Go North or South? ")
-if choice == "North":
-    print("You found a treasure!")
-else:
-    print("You were eaten by a grue.")
-```
-
----
-
-## What XE does *not* do (for now)
-
-- The feature set is small on purpose.
-- No concurrency (no threads, async, etc.).
-- No networking or file I/O in the language yet.
-- No nested closures yet; functions cannot capture local variables from an outer function.
-- The focus is on doing things correctly, not on fancy optimizations.
-
-Possible future steps: better optimizations (e.g. bytecode or IR), more built-ins, a formatter, debugger, or IDE support.
-
----
-
-## What you need to run XE
-
-- **Hardware** – A normal computer (e.g. 4 GB RAM or more).
-- **Software** – Rust toolchain (so you can compile the generated Rust code), and Git if you clone the repo.
-
----
-
-## Project Status
-
-**Current Version:** 0.1.3+1 pre-alpha
-
-The XE compiler is currently in its **Pre-Alpha** stage. The core pipeline works and is covered by integration tests, but the project is still a research prototype.
-
-Recent milestone work completed:
-
-- **Fixed binary expression codegen**: Arithmetic between dynamic and native types now compiles correctly.
-- **Fixed assignment double-evaluation**: Side-effectful expressions in module-level assignments (like `input()`) now execute only once.
-- **Hybrid Typed IR**: Improved performance by inferring and using native Rust types where possible.
-- **Global Variable Access**: Functions can now correctly read and write global variables using a thread-local registry.
-- fixed assignment semantics for reassignment across nested blocks
-- added `elif`, `while`, `for`, `break`, and `continue`
-- replaced silent runtime fallbacks with explicit runtime errors
-- improved compiler errors with source snippets and carets
-- added GitHub Actions CI
-- expanded integration tests and aligned the docs/CLI with the current implementation
+## Roadmap
+
+- [x] Multi-file module dependency resolver & linker
+- [x] Hybrid Typed IR with native unboxed type inference
+- [x] Global & local lexical scope shadowing
+- [x] Formatted compiler error diagnostics with source carets
+- [ ] First-class closures and lambda expressions
+- [ ] Standard library expansion (File I/O, OS, Math)
+- [ ] User-defined structs / records
+- [ ] Language Server Protocol (LSP) and VS Code Extension
 
 ---
 
 ## License
 
-This project is licensed under GPL-3.0-or-later - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the **GPL-3.0-or-later** license. See the [LICENSE](LICENSE) file for details.

@@ -1,6 +1,6 @@
 # Project Status
 
-XE is in **pre-alpha** (v0.1.3+1). While the compiler is stable enough for experimentation and learning, it is not yet intended for production use.
+XE is in **pre-alpha** (v0.1.4). While the compiler is stable enough for experimentation and learning, it is not yet intended for production use.
 
 ## Current Capabilities
 
@@ -14,15 +14,14 @@ The compiler provides a complete pipeline from `.xe` source to a native binary, 
 *   **Standard Control Flow**: Full support for `if/elif/else` branches, `while` loops, `for` loops (iterating over lists or text), and `repeat N times` loops.
 *   **Developer Interface**: The `xe` CLI manages the full workflow: `xe run` for rapid testing, `xe compile` for optimized builds, and `xe install` to manage the environment.
 
-## New in v0.1.3
+## New in v0.1.4
 
-This release introduces significant performance optimizations and capabilities that move XE closer to a production-ready feel:
-
-*   **Optimized Typed IR**: The compiler now aggressively infers and uses native Rust types (`f64`, `bool`, `String`) wherever possible. This significantly reduces runtime boxing/unboxing overhead, resulting in leaner and faster binaries.
-*   **Module-Level Globals**: Functions now have full read and write access to variables defined at the top level of the module. This enables more complex state management across your program.
-*   **Seamless Type Coercion**: Arithmetic and comparisons between dynamic results (like `convert()` or `input()`) and native literals now work out-of-the-box. The compiler handles the necessary wrapping behind the scenes.
-*   **Predictable Side Effects**: Module-level assignments are now guaranteed to evaluate exactly once. Side-effectful expressions, such as user input or function calls, now behave predictably when assigned to global variables.
-*   **Context-Aware Diagnostics**: Debugging is now much faster thanks to enhanced error reporting that includes full source snippets and caret pointers for every compiler error.
+*   **List Equality & Robust Comparisons**: Full deep comparison support for lists (`==` / `!=`) via `xe_eq`.
+*   **String & List Indexing**: Correct typed unwrapping for indexed expressions (`.as_string()`, `.as_f64()`, etc.).
+*   **Nested List Iteration**: Full support for iterating over 2D and nested lists in `for` loops.
+*   **Graceful Bounds Checking**: Native list indexing bounds check reporting clean runtime errors instead of panics.
+*   **AST Scoping & Variable Shadowing**: Robust multi-depth scope management ensuring local loop variables and function parameters shadow module-level symbols properly.
+*   **Safe Intermediate Compilation**: Temporary files in `compile -o` are safely generated in OS temp directories.
 
 ## Current Limitations
 
