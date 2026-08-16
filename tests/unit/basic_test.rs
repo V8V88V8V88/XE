@@ -1160,3 +1160,164 @@ fn test_unit_converter() {
     let output = run_xe_with_input(&source, "1\n100\n3\n").unwrap();
     assert!(output.contains("100 C is 212 F"));
 }
+
+#[test]
+fn test_list_equality_and_inequality() {
+    let output = run_xe(
+        r#"
+a = [1, 2]
+b = [1, 2]
+c = [3, 4]
+empty1 = []
+empty2 = []
+
+if a == b:
+    print("a==b: true")
+else:
+    print("a==b: false")
+
+if a == c:
+    print("a==c: true")
+else:
+    print("a==c: false")
+
+if a != c:
+    print("a!=c: true")
+else:
+    print("a!=c: false")
+
+if empty1 == empty2:
+    print("empty==empty: true")
+else:
+    print("empty==empty: false")
+"#,
+    )
+    .unwrap();
+
+    assert!(output.contains("a==b: true"));
+    assert!(output.contains("a==c: false"));
+    assert!(output.contains("a!=c: true"));
+    assert!(output.contains("empty==empty: true"));
+}
+
+#[test]
+fn test_string_indexing() {
+    let output = run_xe(
+        r#"
+s = "hello"
+first = s[0]
+last = s[4]
+print(first)
+print(last)
+if s[0] == "h":
+    print("matches h")
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(output.trim(), "h\no\nmatches h");
+}
+
+#[test]
+fn test_nested_list_iteration() {
+    let output = run_xe(
+        r#"
+matrix = [[1.0, 2.0], [3.0, 4.0]]
+for row in matrix:
+    print(row)
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(output.trim(), "[1, 2]\n[3, 4]");
+}
+
+#[test]
+fn test_native_list_out_of_bounds_runtime_error() {
+    let result = run_xe(
+        r#"
+items = [1.0, 2.0]
+print(items[5])
+"#,
+    );
+
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.contains("Runtime error: list index 5 out of bounds"));
+}
+
+#[test]
+fn test_for_loop_variable_shadowing_global() {
+    let output = run_xe(
+        r#"
+i = 0
+for i in [10, 20]:
+    print(i)
+print("after:", i)
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(output.trim(), "10\n20\nafter: 0");
+}
+
+#[test]
+fn test_function_param_shadowing_global() {
+    let output = run_xe(
+        r#"
+x = 100
+
+fun foo(x):
+    print("inside:", x)
+
+foo(42)
+print("outside:", x)
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(output.trim(), "inside: 42\noutside: 100");
+}
+
+#[test]
+fn test_mixed_indentation_spaces_and_tabs() {
+    let output = run_xe(
+        "if true:\n \t \tx = 42\n \t \tprint(x)\n",
+    )
+    .unwrap();
+
+    assert_eq!(output.trim(), "42");
+}
+
+#[test]
+fn test_compile_does_not_destroy_existing_rs_file() {
+    let id = get_unique_id();
+    let temp_dir = std::env::temp_dir().join(format!("xe_safety_test_{}", id));
+    let _ = fs::create_dir_all(&temp_dir);
+
+    let original_content = "// Original precious code that must not be deleted";
+    let protected_rs_file = temp_dir.join("program.rs");
+    fs::write(&protected_rs_file, original_content).unwrap();
+
+    let xe_file = temp_dir.join("main.xe");
+    fs::write(&xe_file, "print(\"hello from xe\")\n").unwrap();
+
+    let binary_output = temp_dir.join("program");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_xe"))
+        .arg("compile")
+        .arg(&xe_file)
+        .arg("-o")
+        .arg(&binary_output)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    // Verify protected_rs_file still exists with its original content!
+    assert!(protected_rs_file.exists());
+    let current_content = fs::read_to_string(&protected_rs_file).unwrap();
+    assert_eq!(current_content, original_content);
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+

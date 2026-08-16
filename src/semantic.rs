@@ -102,10 +102,10 @@ impl SemanticAnalyzer {
                         return_type: XeType::Unknown,
                     });
                 }
-                StatementKind::Assignment { name, .. } => {
-                    if !self.is_variable_defined_in_current_scope(name) {
-                        self.define_variable(name, XeType::Unknown, &stmt.span)?;
-                    }
+                StatementKind::Assignment { name, .. }
+                    if !self.is_variable_defined_in_current_scope(name) =>
+                {
+                    self.define_variable(name, XeType::Unknown, &stmt.span)?;
                 }
                 _ => {}
             }
@@ -433,10 +433,9 @@ impl SemanticAnalyzer {
                     typed_elements.push(typed_elem);
                 }
 
-                let final_elem_ty = if is_mixed || elem_ty.is_none() {
-                    XeType::Unknown
-                } else {
-                    elem_ty.unwrap()
+                let final_elem_ty = match elem_ty {
+                    Some(ty) if !is_mixed => ty,
+                    _ => XeType::Unknown,
                 };
 
                 (

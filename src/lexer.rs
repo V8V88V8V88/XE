@@ -201,14 +201,18 @@ impl Lexer {
 
     fn handle_indentation(&mut self) -> XeResult<Option<Token>> {
         let mut indent = 0;
-        while self.peek() == ' ' {
-            indent += 1;
-            self.advance();
-        }
-        // Tabs count as 4 spaces
-        while self.peek() == '\t' {
-            indent += 4;
-            self.advance();
+        while !self.is_at_end() {
+            match self.peek() {
+                ' ' => {
+                    indent += 1;
+                    self.advance();
+                }
+                '\t' => {
+                    indent += 4;
+                    self.advance();
+                }
+                _ => break,
+            }
         }
 
         // Skip empty lines and comment-only lines
@@ -271,7 +275,7 @@ impl Lexer {
         if self.is_at_end() {
             return Err(XeError::new(
                 XeErrorKind::UnterminatedString,
-                Some(Span::new(start_line, start_column)),
+                Some(self.make_span(start_line, start_column)),
             ));
         }
 
@@ -358,16 +362,9 @@ impl Lexer {
                     TokenKind::Equal
                 }
             }
-            '!' => {
-                if self.peek() == '=' {
-                    self.advance();
-                    TokenKind::NotEqual
-                } else {
-                    return Err(XeError::new(
-                        XeErrorKind::UnexpectedCharacter(c),
-                        Some(Span::new(self.line, start_column)),
-                    ));
-                }
+            '!' if self.peek() == '=' => {
+                self.advance();
+                TokenKind::NotEqual
             }
             '<' => {
                 if self.peek() == '=' {

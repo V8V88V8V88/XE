@@ -94,6 +94,10 @@ impl From<XeValue> for String {
     fn from(v: XeValue) -> Self { v.to_string() }
 }
 
+impl From<XeValue> for Vec<XeValue> {
+    fn from(v: XeValue) -> Self { v.as_list() }
+}
+
 impl<T: Into<XeValue>> From<Vec<T>> for XeValue {
     fn from(v: Vec<T>) -> Self {
         XeValue::List(v.into_iter().map(|item| item.into()).collect())
@@ -274,7 +278,13 @@ fn xe_mod_native(left: f64, right: f64) -> f64 {
 
 fn xe_eq(left: &XeValue, right: &XeValue) -> bool {
     match (left, right) {
-        (XeValue::Number(a), XeValue::Number(b)) => (a - b).abs() < f64::EPSILON,
+        (XeValue::Number(a), XeValue::Number(b)) => {
+            if a == b {
+                true
+            } else {
+                (a - b).abs() <= f64::EPSILON * a.abs().max(b.abs()).max(1.0)
+            }
+        }
         (XeValue::Text(a), XeValue::Text(b)) => a == b,
         (XeValue::Boolean(a), XeValue::Boolean(b)) => a == b,
         (XeValue::List(a), XeValue::List(b)) => {
@@ -297,6 +307,14 @@ fn xe_index_check(idx: f64) -> usize {
         xe_runtime_error(&format!("index access expected a non-negative integer, got {}", idx));
     }
     idx as usize
+}
+
+fn xe_vec_index<T: Clone>(list: &[T], idx: f64) -> T {
+    let i = xe_index_check(idx);
+    if i >= list.len() {
+        xe_runtime_error(&format!("list index {} out of bounds", i));
+    }
+    list[i].clone()
 }
 
 fn xe_index(obj: &XeValue, idx: f64) -> XeValue {
@@ -468,10 +486,22 @@ fn xe_set_global(name: &str, value: XeValue) -> XeValue {
                 let rust_type = elem_ty.to_rust_type();
                 self.emit(&format!("let mut {}: {} = ", Self::sanitize_name(variable), rust_type));
                 
-                match elem_ty {
+                match &elem_ty {
                     XeType::Number => self.emit("__xe_loop_value.as_f64();\n"),
                     XeType::Boolean => self.emit("__xe_loop_value.as_bool();\n"),
                     XeType::Text => self.emit("__xe_loop_value.as_string();\n"),
+                    XeType::List(inner) => match **inner {
+                        XeType::Number => self.emit(
+                            "__xe_loop_value.as_list().into_iter().map(|v| v.as_f64()).collect();\n",
+                        ),
+                        XeType::Boolean => self.emit(
+                            "__xe_loop_value.as_list().into_iter().map(|v| v.as_bool()).collect();\n",
+                        ),
+                        XeType::Text => self.emit(
+                            "__xe_loop_value.as_list().into_iter().map(|v| v.as_string()).collect();\n",
+                        ),
+                        _ => self.emit("__xe_loop_value.as_list();\n"),
+                    },
                     _ => self.emit("__xe_loop_value;\n"),
                 }
 
@@ -633,139 +663,125 @@ fn xe_set_global(name: &str, value: XeValue) -> XeValue {
                 }
             }
             TypedExpressionKind::BinaryOp { left, op, right } => {
-                let use_native = (left.ty == XeType::Number || right.ty == XeType::Number) || 
-                                 (left.ty == XeType::Boolean || right.ty == XeType::Boolean) ||
-                                 (left.ty == XeType::Text || right.ty == XeType::Text);
-                
-                if use_native {
-                    if expr.ty == XeType::Unknown {
-                        self.emit("XeValue::from(");
+                match op {
+                    BinaryOperator::Equal => {
+                        self.emit("xe_eq(&XeValue::from(");
+                        self.generate_expression(left);
+                        self.emit("), &XeValue::from(");
+                        self.generate_expression(right);
+                        self.emit("))");
                     }
-                    match op {
-                        BinaryOperator::Add => {
-                            if left.ty == XeType::Text || right.ty == XeType::Text {
-                                self.emit("String::from(xe_add_dynamic(XeValue::from(");
-                                self.generate_expression(left);
-                                self.emit("), XeValue::from(");
-                                self.generate_expression(right);
-                                self.emit(")))");
-                            } else {
-                                self.emit("(");
-                                self.generate_expression_with_coercion(left, &XeType::Number);
-                                self.emit(" + ");
-                                self.generate_expression_with_coercion(right, &XeType::Number);
-                                self.emit(")");
-                            }
-                        }
-                        BinaryOperator::Subtract => {
-                            self.emit("xe_sub_native(");
-                            self.generate_expression_with_coercion(left, &XeType::Number);
-                            self.emit(", ");
-                            self.generate_expression_with_coercion(right, &XeType::Number);
-                            self.emit(")");
-                        }
-                        BinaryOperator::Multiply => {
-                            self.emit("xe_mul_native(");
-                            self.generate_expression_with_coercion(left, &XeType::Number);
-                            self.emit(", ");
-                            self.generate_expression_with_coercion(right, &XeType::Number);
-                            self.emit(")");
-                        }
-                        BinaryOperator::Divide => {
-                            self.emit("xe_div_native(");
-                            self.generate_expression_with_coercion(left, &XeType::Number);
-                            self.emit(", ");
-                            self.generate_expression_with_coercion(right, &XeType::Number);
-                            self.emit(")");
-                        }
-                        BinaryOperator::Modulo => {
-                            self.emit("xe_mod_native(");
-                            self.generate_expression_with_coercion(left, &XeType::Number);
-                            self.emit(", ");
-                            self.generate_expression_with_coercion(right, &XeType::Number);
-                            self.emit(")");
-                        }
-                        BinaryOperator::Equal => {
-                            self.emit("xe_eq(&XeValue::from(");
+                    BinaryOperator::NotEqual => {
+                        self.emit("!xe_eq(&XeValue::from(");
+                        self.generate_expression(left);
+                        self.emit("), &XeValue::from(");
+                        self.generate_expression(right);
+                        self.emit("))");
+                    }
+                    BinaryOperator::Add => {
+                        if left.ty == XeType::Number && right.ty == XeType::Number {
+                            self.emit("(");
                             self.generate_expression(left);
-                            self.emit("), &XeValue::from(");
+                            self.emit(" + ");
+                            self.generate_expression(right);
+                            self.emit(")");
+                        } else if left.ty == XeType::Text || right.ty == XeType::Text {
+                            self.emit("String::from(xe_add_dynamic(XeValue::from(");
+                            self.generate_expression(left);
+                            self.emit("), XeValue::from(");
+                            self.generate_expression(right);
+                            self.emit(")))");
+                        } else {
+                            self.emit("xe_add_dynamic(XeValue::from(");
+                            self.generate_expression(left);
+                            self.emit("), XeValue::from(");
                             self.generate_expression(right);
                             self.emit("))");
-                        }
-                        BinaryOperator::NotEqual => {
-                            self.emit("!xe_eq(&XeValue::from(");
-                            self.generate_expression(left);
-                            self.emit("), &XeValue::from(");
-                            self.generate_expression(right);
-                            self.emit("))");
-                        }
-                        BinaryOperator::Less => {
-                            self.emit("(");
-                            self.generate_expression_with_coercion(left, &XeType::Number);
-                            self.emit(" < ");
-                            self.generate_expression_with_coercion(right, &XeType::Number);
-                            self.emit(")");
-                        }
-                        BinaryOperator::Greater => {
-                            self.emit("(");
-                            self.generate_expression_with_coercion(left, &XeType::Number);
-                            self.emit(" > ");
-                            self.generate_expression_with_coercion(right, &XeType::Number);
-                            self.emit(")");
-                        }
-                        BinaryOperator::LessEqual => {
-                            self.emit("(");
-                            self.generate_expression_with_coercion(left, &XeType::Number);
-                            self.emit(" <= ");
-                            self.generate_expression_with_coercion(right, &XeType::Number);
-                            self.emit(")");
-                        }
-                        BinaryOperator::GreaterEqual => {
-                            self.emit("(");
-                            self.generate_expression_with_coercion(left, &XeType::Number);
-                            self.emit(" >= ");
-                            self.generate_expression_with_coercion(right, &XeType::Number);
-                            self.emit(")");
-                        }
-                        BinaryOperator::And => {
-                            self.emit("(");
-                            self.generate_expression_with_coercion(left, &XeType::Boolean);
-                            self.emit(" && ");
-                            self.generate_expression_with_coercion(right, &XeType::Boolean);
-                            self.emit(")");
-                        }
-                        BinaryOperator::Or => {
-                            self.emit("(");
-                            self.generate_expression_with_coercion(left, &XeType::Boolean);
-                            self.emit(" || ");
-                            self.generate_expression_with_coercion(right, &XeType::Boolean);
-                            self.emit(")");
-                        }
-                    }
-                    if expr.ty == XeType::Unknown {
-                        self.emit(")");
-                    }
-                } else {
-                    self.emit("xe_add_dynamic(XeValue::from(");
-                    self.generate_expression(left);
-                    self.emit("), XeValue::from(");
-                    self.generate_expression(right);
-                    self.emit("))");
-                    if expr.ty != XeType::Unknown {
-                        match &expr.ty {
-                            XeType::Number => self.emit(".as_f64()"),
-                            XeType::Boolean => self.emit(".as_bool()"),
-                            XeType::Text => self.emit(".as_string()"),
-                            XeType::List(inner) => {
+                            if let XeType::List(inner) = &expr.ty {
                                 match **inner {
-                                    XeType::Number => self.emit(".as_list().into_iter().map(|v| v.as_f64()).collect()"),
-                                    XeType::Boolean => self.emit(".as_list().into_iter().map(|v| v.as_bool()).collect()"),
-                                    XeType::Text => self.emit(".as_list().into_iter().map(|v| v.as_string()).collect()"),
+                                    XeType::Number => self.emit(
+                                        ".as_list().into_iter().map(|v| v.as_f64()).collect()",
+                                    ),
+                                    XeType::Boolean => self.emit(
+                                        ".as_list().into_iter().map(|v| v.as_bool()).collect()",
+                                    ),
+                                    XeType::Text => self.emit(
+                                        ".as_list().into_iter().map(|v| v.as_string()).collect()",
+                                    ),
                                     _ => self.emit(".as_list()"),
                                 }
                             }
-                            _ => {}
                         }
+                    }
+                    BinaryOperator::Subtract => {
+                        self.emit("xe_sub_native(");
+                        self.generate_expression_with_coercion(left, &XeType::Number);
+                        self.emit(", ");
+                        self.generate_expression_with_coercion(right, &XeType::Number);
+                        self.emit(")");
+                    }
+                    BinaryOperator::Multiply => {
+                        self.emit("xe_mul_native(");
+                        self.generate_expression_with_coercion(left, &XeType::Number);
+                        self.emit(", ");
+                        self.generate_expression_with_coercion(right, &XeType::Number);
+                        self.emit(")");
+                    }
+                    BinaryOperator::Divide => {
+                        self.emit("xe_div_native(");
+                        self.generate_expression_with_coercion(left, &XeType::Number);
+                        self.emit(", ");
+                        self.generate_expression_with_coercion(right, &XeType::Number);
+                        self.emit(")");
+                    }
+                    BinaryOperator::Modulo => {
+                        self.emit("xe_mod_native(");
+                        self.generate_expression_with_coercion(left, &XeType::Number);
+                        self.emit(", ");
+                        self.generate_expression_with_coercion(right, &XeType::Number);
+                        self.emit(")");
+                    }
+                    BinaryOperator::Less => {
+                        self.emit("(");
+                        self.generate_expression_with_coercion(left, &XeType::Number);
+                        self.emit(" < ");
+                        self.generate_expression_with_coercion(right, &XeType::Number);
+                        self.emit(")");
+                    }
+                    BinaryOperator::Greater => {
+                        self.emit("(");
+                        self.generate_expression_with_coercion(left, &XeType::Number);
+                        self.emit(" > ");
+                        self.generate_expression_with_coercion(right, &XeType::Number);
+                        self.emit(")");
+                    }
+                    BinaryOperator::LessEqual => {
+                        self.emit("(");
+                        self.generate_expression_with_coercion(left, &XeType::Number);
+                        self.emit(" <= ");
+                        self.generate_expression_with_coercion(right, &XeType::Number);
+                        self.emit(")");
+                    }
+                    BinaryOperator::GreaterEqual => {
+                        self.emit("(");
+                        self.generate_expression_with_coercion(left, &XeType::Number);
+                        self.emit(" >= ");
+                        self.generate_expression_with_coercion(right, &XeType::Number);
+                        self.emit(")");
+                    }
+                    BinaryOperator::And => {
+                        self.emit("(");
+                        self.generate_expression_with_coercion(left, &XeType::Boolean);
+                        self.emit(" && ");
+                        self.generate_expression_with_coercion(right, &XeType::Boolean);
+                        self.emit(")");
+                    }
+                    BinaryOperator::Or => {
+                        self.emit("(");
+                        self.generate_expression_with_coercion(left, &XeType::Boolean);
+                        self.emit(" || ");
+                        self.generate_expression_with_coercion(right, &XeType::Boolean);
+                        self.emit(")");
                     }
                 }
             }
@@ -838,20 +854,27 @@ fn xe_set_global(name: &str, value: XeValue) -> XeValue {
             TypedExpressionKind::Index { object, index } => {
                 if let XeType::List(inner) = &object.ty {
                     if **inner != XeType::Unknown {
-                        self.emit("((");
+                        self.emit("xe_vec_index(&(");
                         self.generate_expression(object);
-                        self.emit(")[xe_index_check(");
+                        self.emit("), ");
                         self.generate_expression_with_coercion(index, &XeType::Number);
-                        self.emit(")].clone())");
+                        self.emit(")");
                         return;
                     }
                 }
-                
+
                 self.emit("xe_index(&XeValue::from(");
                 self.generate_expression(object);
                 self.emit("), ");
                 self.generate_expression_with_coercion(index, &XeType::Number);
                 self.emit(")");
+                if expr.ty == XeType::Text {
+                    self.emit(".as_string()");
+                } else if expr.ty == XeType::Number {
+                    self.emit(".as_f64()");
+                } else if expr.ty == XeType::Boolean {
+                    self.emit(".as_bool()");
+                }
             }
             TypedExpressionKind::Wrap(expr) => {
                 self.emit("XeValue::from(");

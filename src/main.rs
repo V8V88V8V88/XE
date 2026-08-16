@@ -614,8 +614,12 @@ fn main() {
                         let output_file = &args[4];
                         let rustc = ensure_rustc_available();
 
-                        // Create a temporary .rs file
-                        let temp_rs = format!("{}.rs", output_file);
+                        // Create a temporary .rs file safely in temp_dir
+                        let unique_id = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_nanos();
+                        let temp_rs = std::env::temp_dir().join(format!("xe_build_{}.rs", unique_id));
                         if let Err(e) = fs::write(&temp_rs, &rust_code) {
                             eprintln!("Error writing intermediate file: {}", e);
                             std::process::exit(1);

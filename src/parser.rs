@@ -553,7 +553,7 @@ impl Parser {
             Ok(())
         } else {
             Err(XeError::new(
-                XeErrorKind::ExpectedToken(format!("{:?}", kind)),
+                XeErrorKind::ExpectedToken(format_token_kind(kind).to_string()),
                 Some(self.current_span()),
             ))
         }
@@ -608,3 +608,54 @@ impl Parser {
         }
     }
 }
+
+fn format_token_kind(kind: &TokenKind) -> &'static str {
+    match kind {
+        TokenKind::Number(_) => "number",
+        TokenKind::String(_) => "string",
+        TokenKind::True => "true",
+        TokenKind::False => "false",
+        TokenKind::Identifier(_) => "identifier",
+        TokenKind::If => "if",
+        TokenKind::Else => "else",
+        TokenKind::Elif => "elif",
+        TokenKind::Function => "fun",
+        TokenKind::While => "while",
+        TokenKind::For => "for",
+        TokenKind::In => "in",
+        TokenKind::Repeat => "repeat",
+        TokenKind::Times => "times",
+        TokenKind::And => "and",
+        TokenKind::Or => "or",
+        TokenKind::Not => "not",
+        TokenKind::Return => "return",
+        TokenKind::Break => "break",
+        TokenKind::Continue => "continue",
+        TokenKind::Import => "import",
+        TokenKind::From => "from",
+        TokenKind::Plus => "+",
+        TokenKind::Minus => "-",
+        TokenKind::Star => "*",
+        TokenKind::Slash => "/",
+        TokenKind::Percent => "%",
+        TokenKind::Equal => "=",
+        TokenKind::EqualEqual => "==",
+        TokenKind::NotEqual => "!=",
+        TokenKind::Less => "<",
+        TokenKind::Greater => ">",
+        TokenKind::LessEqual => "<=",
+        TokenKind::GreaterEqual => ">=",
+        TokenKind::LeftParen => "(",
+        TokenKind::RightParen => ")",
+        TokenKind::LeftBracket => "[",
+        TokenKind::RightBracket => "]",
+        TokenKind::Colon => ":",
+        TokenKind::Comma => ",",
+        TokenKind::Dot => ".",
+        TokenKind::Newline => "newline",
+        TokenKind::Indent => "indent",
+        TokenKind::Dedent => "dedent",
+        TokenKind::Eof => "end of file",
+    }
+}
+
