@@ -60,6 +60,19 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - name: Verify Cargo.toml version matches release tag
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          TAG_VERSION="${TAG#v}"
+          CARGO_VERSION=$(cargo metadata --format-version 1 --no-deps | grep -o '"version":"[^"]*"' | head -n1 | cut -d'"' -f4)
+          echo "Release Tag Version: $TAG_VERSION"
+          echo "Cargo.toml Version:  $CARGO_VERSION"
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "::error::Release tag ($TAG_VERSION) does not match Cargo.toml version ($CARGO_VERSION)! Aborting build."
+            exit 1
+          fi
+
       - name: Build release binary
         run: cargo build --release --locked --target ${{ matrix.target }}
 
