@@ -41,7 +41,15 @@ fun square(n):
 Current rules:
 
 - `return` is only valid inside functions
-- if a function reaches the end without an explicit `return`, XE returns `0`
+- if a function reaches the end without returning a value, or uses a bare `return`, the call evaluates to `none`
+
+```xe
+fun greet():
+    print("hi")
+
+x = greet()
+print(x) # none
+```
 
 ## Scope model
 
@@ -65,14 +73,25 @@ fun show():
 show()
 ```
 
-That is valid in XE because global variables are stored in a registry that all functions can see.
+Functions read the current value of a global, including changes made by top-level loops and by other functions. Mutating a global list, map, or struct (with `append`, `pop`, `items[0] = ...`, `p.x = ...`) changes the global itself.
 
-## Local variables vs reassignment
+```xe
+items = []
 
-Inside a function, a name behaves like any other XE name:
+fun add(x):
+    append(items, x)
+
+add(1)
+print(items) # [1]
+```
+
+## Local variables and `global`
+
+XE follows Python's rule: a name that is **assigned** anywhere inside a function is local to that function.
 
 - first assignment creates it in the current local scope
 - later assignment reuses that same variable
+- a local may have the same name as a global; the global is left untouched
 
 ```xe
 fun counter():
@@ -80,6 +99,30 @@ fun counter():
     total = total + 1
     return total
 ```
+
+To assign to a module-level variable from inside a function, declare it with `global`:
+
+```xe
+count = 0
+
+fun increment():
+    global count
+    count = count + 1
+
+increment()
+print(count) # 1
+```
+
+Reading a name before assigning it in the same function is a compile error, because the name is local there:
+
+```xe
+count = 0
+
+fun increment():
+    count = count + 1 # Error: local variable 'count' is used before it is assigned
+```
+
+`global` can also create a module-level variable from inside a function. Using a global before any assignment to it has run is a runtime error.
 
 ## Recursion
 

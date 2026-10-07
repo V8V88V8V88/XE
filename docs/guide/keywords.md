@@ -7,12 +7,14 @@ Keywords are reserved words that have a special meaning in XE. They cannot be us
 | Keyword | Category | Purpose |
 | --- | --- | --- |
 | `fun` | Declarations | Define a new function |
+| `fn` | Declarations | Short alias for `fun` |
 | `function` | Declarations | Alias for `fun` (legacy support) |
+| `struct` | Declarations | Define a new composite data structure |
 | `if` | Control Flow | Start a conditional block |
 | `elif` | Control Flow | Add a conditional branch to an `if` statement |
 | `else` | Control Flow | Fallback branch for an `if` statement |
 | `while` | Loops | Start a conditional loop |
-| `for` | Loops | Iterate over a list or text |
+| `for` | Loops | Iterate over a list, text, or map |
 | `in` | Loops | Used in the `for` loop syntax |
 | `repeat` | Loops | Start a fixed-count loop |
 | `times` | Loops | Used in the `repeat` loop syntax |
@@ -24,6 +26,7 @@ Keywords are reserved words that have a special meaning in XE. They cannot be us
 | `true` | Literals | Boolean true value |
 | `false` | Literals | Boolean false value |
 | `return` | Functions | Return a value from a function |
+| `global` | Functions | Let a function assign to a module-level variable |
 | `import` | Modules | Import an entire module |
 | `from` | Modules | Import specific names from a module |
 
@@ -31,8 +34,15 @@ Keywords are reserved words that have a special meaning in XE. They cannot be us
 
 ### Declarations
 
-- **`fun`**: The primary keyword for defining functions. Example: `fun add(a, b):`.
+- **`fun`**, **`fn`**: Define functions. Example: `fun add(a, b):` or `fn add(a, b):`.
 - **`function`**: A legacy alias for `fun`.
+- **`struct`**: Defines user-defined composite data types with named fields. Example:
+  ```xe
+  struct Point:
+      x
+      y
+  ```
+- **`global`**: Inside a function, marks names as module-level variables so assignments update them instead of creating locals. Example: `global count`. See [Functions and Scope](/guide/functions-and-scope).
 
 ### Control Flow
 
@@ -41,7 +51,7 @@ Keywords are reserved words that have a special meaning in XE. They cannot be us
 ### Loops
 
 - **`while`**: Repeats a block as long as a condition is true.
-- **`for ... in ...`**: Iterates through every element in a list or every character in a text value.
+- **`for ... in ...`**: Iterates through every element in a list, every character in a text value, or every key in a map.
 - **`repeat ... times`**: A high-level loop for repeating an action a specific number of times.
 - **`break`**: Stops the execution of the innermost loop.
 - **`continue`**: Skips the current iteration and goes to the next check/value in the loop.
