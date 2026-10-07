@@ -2,16 +2,18 @@
 
 XE uses an **inferred type system** with a **Typed IR**. The compiler tries to map variables directly to native Rust types for performance, falling back to a dynamic `XeValue` box when types are mixed or unknown.
 
-## The four value kinds
+## Value kinds
 
-XE currently has four runtime value kinds:
+XE has six primary runtime value kinds:
 
 | Type | Example | Notes |
 | --- | --- | --- |
 | `number` | `42`, `3.14` | Stored as numeric runtime values |
 | `text` | `"hello"` | Double-quoted strings |
 | `boolean` | `true`, `false` | Used directly in conditions |
-| `list` | `[1, 2, 3]` | Ordered collections with zero-based indexing |
+| `list` | `[1, 2, 3]` | Ordered collections with zero-based indexing and mutation |
+| `map` | `{"a": 1, "b": 2}` | Key-value dictionary collections |
+| `struct` | `Point(10, 20)` | User-defined composite structures with named fields |
 
 Check a value's runtime type with `type(...)`:
 
@@ -19,6 +21,7 @@ Check a value's runtime type with `type(...)`:
 print(type(42))
 print(type("XE"))
 print(type([1, 2, 3]))
+print(type({"a": 1}))
 ```
 
 ## Variables are mutable
@@ -99,14 +102,78 @@ Lists are array-like collections backed by Rust `Vec`, so indexing is natural an
 items = [10, 20, 30]
 print(items[0])
 print(length(items))
+
+# Index mutation
+items[1] = 99
+print(items) # [10, 99, 30]
+
+# Collection operations
+append(items, 40)
+print(items) # [10, 99, 30, 40]
+
+last = pop(items)
+print(last) # 40
+
+print(contains(items, 99)) # true
 ```
 
-Important current rules:
+String utility functions:
 
-- indexing is zero-based
-- negative indexing is not supported
-- out-of-bounds access is a runtime error
-- list mutation is not implemented yet
+```xe
+words = split("cat,dog,bird", ",")
+print(words[0], words[1]) # cat dog
+
+joined = join(words, "-")
+print(joined) # cat-dog-bird
+```
+
+## Maps (Dictionaries)
+
+Maps store key-value associations with text keys:
+
+```xe
+user = {
+    "name": "Alice",
+    "age": 30,
+    "admin": true
+}
+
+# Key access & mutation
+print(user["name"])
+user["age"] = 31
+
+# Map built-ins
+print(has_key(user, "name")) # true
+ks = keys(user)
+vs = values(user)
+
+# Map iteration (iterates over keys)
+for k in user:
+    print(k, user[k])
+```
+
+## Structs
+
+User-defined structs provide typed composite data modeling with named fields:
+
+```xe
+struct Point:
+    x
+    y
+
+# Constructor instantiation
+p = Point(10, 20)
+
+# Field access and mutation
+print(p.x, p.y) # 10 20
+p.x = 42
+print(p.x, p.y) # 42 20
+
+# Value-based structural equality
+p1 = Point(1, 2)
+p2 = Point(1, 2)
+print(p1 == p2) # true
+```
 
 ## Conversion rules
 
