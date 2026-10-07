@@ -81,6 +81,7 @@ detect_os() {
   case "$(uname -s)" in
     Linux) printf 'linux' ;;
     Darwin) printf 'darwin' ;;
+    FreeBSD) printf 'freebsd' ;;
     *)
       fail "unsupported operating system. Use GitHub Releases for manual installation."
       ;;
@@ -105,6 +106,7 @@ asset_name_for() {
     linux:x86_64) printf 'xe-x86_64-unknown-linux-gnu.tar.gz' ;;
     darwin:x86_64) printf 'xe-x86_64-apple-darwin.tar.gz' ;;
     darwin:aarch64) printf 'xe-aarch64-apple-darwin.tar.gz' ;;
+    freebsd:x86_64) printf 'xe-x86_64-unknown-freebsd.tar.gz' ;;
     *)
       fail "no prebuilt XE binary is published for ${os}/${arch} yet."
       ;;

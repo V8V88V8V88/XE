@@ -60,7 +60,7 @@ main()
 
 ## Installation
 
-### Quick Install (Linux / macOS)
+### Quick Install (Linux / macOS / FreeBSD)
 
 ```bash
 curl -fsSL https://xe-lang.vercel.app/install.sh | bash

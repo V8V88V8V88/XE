@@ -31,8 +31,8 @@
           </button>
         </div>
         <p class="xe-install-note">
-          macOS and Linux are supported by the installer today. Windows users can download the zip
-          from <a href="https://github.com/V8V88V8V88/XE" target="_blank" rel="noopener noreferrer">GitHub</a>.
+          Linux, macOS, and FreeBSD are supported by the one-line installer. Windows users can download the zip from
+          <a href="https://github.com/V8V88V8V88/XE/releases" target="_blank" rel="noopener noreferrer">GitHub Releases</a> or install via <code>cargo install</code>.
         </p>
       </div>
     </section>
