@@ -27,6 +27,8 @@ pub enum TokenKind {
     Continue,
     Import,
     From,
+    Struct,
+    Global,
 
     // Operators
     Plus,
@@ -47,6 +49,8 @@ pub enum TokenKind {
     RightParen,
     LeftBracket,
     RightBracket,
+    LeftBrace,
+    RightBrace,
     Colon,
     Comma,
     Dot,
@@ -82,6 +86,7 @@ pub struct Lexer {
     indent_stack: Vec<usize>,
     pending_tokens: Vec<Token>,
     at_line_start: bool,
+    delimiter_depth: usize,
 }
 
 impl Lexer {
@@ -100,6 +105,7 @@ impl Lexer {
             indent_stack: vec![0],
             pending_tokens: Vec::new(),
             at_line_start: true,
+            delimiter_depth: 0,
         }
     }
 
@@ -157,10 +163,13 @@ impl Lexer {
 
         // Handle newlines
         if c == '\n' {
-            let token = self.make_token(TokenKind::Newline, self.line, self.column);
             self.advance();
             self.line += 1;
             self.column = 1;
+            if self.delimiter_depth > 0 {
+                return self.next_token();
+            }
+            let token = self.make_token(TokenKind::Newline, self.line - 1, 1);
             self.at_line_start = true;
             return Ok(token);
         }
@@ -171,9 +180,12 @@ impl Lexer {
             if self.peek() == '\n' {
                 self.advance();
             }
-            let token = self.make_token(TokenKind::Newline, self.line, self.column);
             self.line += 1;
             self.column = 1;
+            if self.delimiter_depth > 0 {
+                return self.next_token();
+            }
+            let token = self.make_token(TokenKind::Newline, self.line - 1, 1);
             self.at_line_start = true;
             return Ok(token);
         }
@@ -305,7 +317,10 @@ impl Lexer {
         let start_column = self.column;
         let mut ident = String::new();
 
-        while !self.is_at_end() && (self.peek().is_alphanumeric() || self.peek() == '_') {
+        // Only alphabetic characters, ASCII digits and '_' so every identifier is also valid in Rust.
+        while !self.is_at_end()
+            && (self.peek().is_alphabetic() || self.peek().is_ascii_digit() || self.peek() == '_')
+        {
             ident.push(self.peek());
             self.advance();
         }
@@ -314,8 +329,8 @@ impl Lexer {
             "if" => TokenKind::If,
             "else" => TokenKind::Else,
             "elif" => TokenKind::Elif,
-            // Support both `function` (legacy) and `fun` (preferred).
-            "function" | "fun" => TokenKind::Function,
+            // Support `function`, `fun`, and `fn`.
+            "function" | "fun" | "fn" => TokenKind::Function,
             "while" => TokenKind::While,
             "for" => TokenKind::For,
             "in" => TokenKind::In,
@@ -331,6 +346,8 @@ impl Lexer {
             "continue" => TokenKind::Continue,
             "import" => TokenKind::Import,
             "from" => TokenKind::From,
+            "struct" => TokenKind::Struct,
+            "global" => TokenKind::Global,
             _ => TokenKind::Identifier(ident),
         };
 
@@ -347,10 +364,36 @@ impl Lexer {
             '*' => TokenKind::Star,
             '/' => TokenKind::Slash,
             '%' => TokenKind::Percent,
-            '(' => TokenKind::LeftParen,
-            ')' => TokenKind::RightParen,
-            '[' => TokenKind::LeftBracket,
-            ']' => TokenKind::RightBracket,
+            '(' => {
+                self.delimiter_depth += 1;
+                TokenKind::LeftParen
+            }
+            ')' => {
+                if self.delimiter_depth > 0 {
+                    self.delimiter_depth -= 1;
+                }
+                TokenKind::RightParen
+            }
+            '[' => {
+                self.delimiter_depth += 1;
+                TokenKind::LeftBracket
+            }
+            ']' => {
+                if self.delimiter_depth > 0 {
+                    self.delimiter_depth -= 1;
+                }
+                TokenKind::RightBracket
+            }
+            '{' => {
+                self.delimiter_depth += 1;
+                TokenKind::LeftBrace
+            }
+            '}' => {
+                if self.delimiter_depth > 0 {
+                    self.delimiter_depth -= 1;
+                }
+                TokenKind::RightBrace
+            }
             ':' => TokenKind::Colon,
             ',' => TokenKind::Comma,
             '.' => TokenKind::Dot,

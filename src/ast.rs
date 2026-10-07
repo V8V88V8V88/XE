@@ -7,16 +7,24 @@ pub enum XeType {
     Text,
     Boolean,
     List(Box<XeType>),
+    Map,
+    Struct(String),
     Void,
     Unknown,
 }
 
 impl XeType {
     pub fn is_compatible(&self, other: &XeType) -> bool {
-        if self == &XeType::Unknown || other == &XeType::Unknown {
-            return true;
+        match (self, other) {
+            (XeType::Unknown, _) | (_, XeType::Unknown) => true,
+            (XeType::List(a), XeType::List(b)) => a.is_compatible(b),
+            _ => self == other,
         }
-        self == other
+    }
+
+    /// True when the Rust representation of this type is the dynamic `XeValue`.
+    pub fn is_dynamic(&self) -> bool {
+        matches!(self, XeType::Unknown | XeType::Map | XeType::Struct(_))
     }
 
     pub fn name(&self) -> String {
@@ -29,6 +37,8 @@ impl XeType {
             XeType::Text => "String".to_string(),
             XeType::Boolean => "bool".to_string(),
             XeType::List(inner) => format!("Vec<{}>", inner.to_rust_type()),
+            XeType::Map => "XeValue".to_string(),
+            XeType::Struct(_) => "XeValue".to_string(),
             XeType::Void => "()".to_string(),
             XeType::Unknown => "XeValue".to_string(),
         }
@@ -42,6 +52,8 @@ impl fmt::Display for XeType {
             XeType::Text => write!(f, "text"),
             XeType::Boolean => write!(f, "boolean"),
             XeType::List(inner) => write!(f, "list<{}>", inner),
+            XeType::Map => write!(f, "map"),
+            XeType::Struct(name) => write!(f, "struct {}", name),
             XeType::Void => write!(f, "void"),
             XeType::Unknown => write!(f, "unknown"),
         }
@@ -80,6 +92,9 @@ pub enum StatementKind {
         module: ModulePath,
         names: Vec<String>,
     },
+    Global {
+        names: Vec<String>,
+    },
     Assignment {
         name: String,
         value: Expression,
@@ -107,6 +122,20 @@ pub enum StatementKind {
         params: Vec<String>,
         body: Vec<Statement>,
     },
+    StructDef {
+        name: String,
+        fields: Vec<String>,
+    },
+    IndexAssignment {
+        object: Expression,
+        index: Expression,
+        value: Expression,
+    },
+    FieldAssignment {
+        object: Expression,
+        field: String,
+        value: Expression,
+    },
     Return {
         value: Option<Expression>,
     },
@@ -129,6 +158,7 @@ pub enum ExpressionKind {
     String(String),
     Boolean(bool),
     List(Vec<Expression>),
+    Map(Vec<(Expression, Expression)>),
 
     // Variable
     Identifier(String),
@@ -150,10 +180,16 @@ pub enum ExpressionKind {
         args: Vec<Expression>,
     },
 
-    // Index access: list[index]
+    // Index access: list[index] or map[key]
     Index {
         object: Box<Expression>,
         index: Box<Expression>,
+    },
+
+    // Field access: obj.field
+    FieldAccess {
+        object: Box<Expression>,
+        field: String,
     },
 }
 
@@ -207,6 +243,8 @@ impl BinaryOperator {
 #[derive(Debug, Clone)]
 pub struct TypedProgram {
     pub statements: Vec<TypedStatement>,
+    /// Module-level variables and their storage types.
+    pub globals: Vec<(String, XeType)>,
 }
 
 #[derive(Debug, Clone)]
@@ -246,12 +284,27 @@ pub enum TypedStatementKind {
         body: Vec<TypedStatement>,
         return_type: XeType,
     },
+    StructDef {
+        name: String,
+        fields: Vec<String>,
+    },
+    IndexAssignment {
+        object: TypedExpression,
+        index: TypedExpression,
+        value: TypedExpression,
+    },
+    FieldAssignment {
+        object: TypedExpression,
+        field: String,
+        value: TypedExpression,
+    },
     Return {
         value: Option<TypedExpression>,
     },
     Break,
     Continue,
     Expression(TypedExpression),
+    Nop,
 }
 
 #[derive(Debug, Clone)]
@@ -269,6 +322,7 @@ pub enum TypedExpressionKind {
     String(String),
     Boolean(bool),
     List(Vec<TypedExpression>),
+    Map(Vec<(TypedExpression, TypedExpression)>),
 
     // Variable
     Identifier(String),
@@ -296,7 +350,26 @@ pub enum TypedExpressionKind {
         index: Box<TypedExpression>,
     },
 
+    // Field access
+    FieldAccess {
+        object: Box<TypedExpression>,
+        field: String,
+    },
+
     // Coercion nodes (The "Wrap/Unwrap" nodes)
     Wrap(Box<TypedExpression>),           // Native -> XeValue (Dynamic)
-    Unwrap(Box<TypedExpression>, XeType), // XeValue (Dynamic) -> Native
+    Unwrap(Box<TypedExpression>, XeType), // Any type -> the given type (runtime-checked)
+}
+
+/// Whether executing this block is guaranteed to hit a `return`.
+pub fn block_always_returns(statements: &[Statement]) -> bool {
+    statements.iter().any(|statement| match &statement.kind {
+        StatementKind::Return { .. } => true,
+        StatementKind::If {
+            then_block,
+            else_block: Some(else_block),
+            ..
+        } => block_always_returns(then_block) && block_always_returns(else_block),
+        _ => false,
+    })
 }

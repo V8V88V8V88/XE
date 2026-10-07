@@ -85,23 +85,65 @@ impl Parser {
             });
         }
 
-        // Assignment or expression
-        if let TokenKind::Identifier(name) = self.peek_kind() {
-            let name = name.clone();
-            if self.peek_next_kind() == Some(&TokenKind::Equal) {
-                self.advance(); // consume identifier
-                self.advance(); // consume =
-                let value = self.parse_expression()?;
-                self.expect_statement_end()?;
-                return Ok(Statement {
-                    kind: StatementKind::Assignment { name, value },
-                    span,
-                });
+        if self.check(&TokenKind::Global) {
+            self.advance();
+            let mut names = vec![self.expect_identifier()?];
+            while self.match_token(&TokenKind::Comma) {
+                names.push(self.expect_identifier()?);
+            }
+            self.expect_statement_end()?;
+            return Ok(Statement {
+                kind: StatementKind::Global { names },
+                span,
+            });
+        }
+
+        // Struct definition
+        if self.check(&TokenKind::Struct) {
+            return self.parse_struct_def();
+        }
+
+        // Assignment or expression statement
+        let expr = self.parse_expression()?;
+        if self.match_token(&TokenKind::Equal) {
+            let value = self.parse_expression()?;
+            self.expect_statement_end()?;
+            match expr.kind {
+                ExpressionKind::Identifier(name) => {
+                    return Ok(Statement {
+                        kind: StatementKind::Assignment { name, value },
+                        span,
+                    });
+                }
+                ExpressionKind::Index { object, index } => {
+                    return Ok(Statement {
+                        kind: StatementKind::IndexAssignment {
+                            object: *object,
+                            index: *index,
+                            value,
+                        },
+                        span,
+                    });
+                }
+                ExpressionKind::FieldAccess { object, field } => {
+                    return Ok(Statement {
+                        kind: StatementKind::FieldAssignment {
+                            object: *object,
+                            field,
+                            value,
+                        },
+                        span,
+                    });
+                }
+                _ => {
+                    return Err(XeError::new(
+                        XeErrorKind::ExpectedToken("valid assignment target".to_string()),
+                        Some(span),
+                    ));
+                }
             }
         }
 
-        // Expression statement
-        let expr = self.parse_expression()?;
         self.expect_statement_end()?;
         Ok(Statement {
             kind: StatementKind::Expression(expr),
@@ -160,6 +202,32 @@ impl Parser {
 
         Ok(Statement {
             kind: StatementKind::FunctionDef { name, params, body },
+            span,
+        })
+    }
+
+    fn parse_struct_def(&mut self) -> XeResult<Statement> {
+        let span = self.current_span();
+        self.advance(); // consume 'struct'
+
+        let name = self.expect_identifier()?;
+        self.expect(&TokenKind::Colon)?;
+        self.expect_newline()?;
+
+        self.expect(&TokenKind::Indent)?;
+        let mut fields = Vec::new();
+        while !self.check(&TokenKind::Dedent) && !self.check(&TokenKind::Eof) {
+            if self.match_token(&TokenKind::Newline) {
+                continue;
+            }
+            let field_name = self.expect_identifier()?;
+            fields.push(field_name);
+            self.expect_statement_end()?;
+        }
+        self.expect(&TokenKind::Dedent)?;
+
+        Ok(Statement {
+            kind: StatementKind::StructDef { name, fields },
             span,
         })
     }
@@ -385,6 +453,18 @@ impl Parser {
                     },
                     span,
                 };
+            } else if self.check(&TokenKind::Dot) {
+                // Field access
+                let span = expr.span.clone();
+                self.advance(); // consume .
+                let field = self.expect_identifier()?;
+                expr = Expression {
+                    kind: ExpressionKind::FieldAccess {
+                        object: Box::new(expr),
+                        field,
+                    },
+                    span,
+                };
             } else {
                 break;
             }
@@ -450,6 +530,15 @@ impl Parser {
                     span,
                 })
             }
+            TokenKind::LeftBrace => {
+                self.advance();
+                let entries = self.parse_map_entries()?;
+                self.expect(&TokenKind::RightBrace)?;
+                Ok(Expression {
+                    kind: ExpressionKind::Map(entries),
+                    span,
+                })
+            }
             _ => Err(XeError::new(XeErrorKind::ExpectedExpression, Some(span))),
         }
     }
@@ -459,6 +548,9 @@ impl Parser {
         if !self.check(&TokenKind::RightParen) {
             args.push(self.parse_expression()?);
             while self.match_token(&TokenKind::Comma) {
+                if self.check(&TokenKind::RightParen) {
+                    break;
+                }
                 args.push(self.parse_expression()?);
             }
         }
@@ -470,10 +562,37 @@ impl Parser {
         if !self.check(&TokenKind::RightBracket) {
             elements.push(self.parse_expression()?);
             while self.match_token(&TokenKind::Comma) {
+                if self.check(&TokenKind::RightBracket) {
+                    break;
+                }
                 elements.push(self.parse_expression()?);
             }
         }
         Ok(elements)
+    }
+
+    fn parse_map_entries(&mut self) -> XeResult<Vec<(Expression, Expression)>> {
+        let mut entries = Vec::new();
+        while self.match_token(&TokenKind::Newline) {}
+        if !self.check(&TokenKind::RightBrace) {
+            let key = self.parse_expression()?;
+            self.expect(&TokenKind::Colon)?;
+            let value = self.parse_expression()?;
+            entries.push((key, value));
+
+            while self.match_token(&TokenKind::Comma) {
+                while self.match_token(&TokenKind::Newline) {}
+                if self.check(&TokenKind::RightBrace) {
+                    break;
+                }
+                let key = self.parse_expression()?;
+                self.expect(&TokenKind::Colon)?;
+                let value = self.parse_expression()?;
+                entries.push((key, value));
+            }
+        }
+        while self.match_token(&TokenKind::Newline) {}
+        Ok(entries)
     }
 
     fn parse_module_path(&mut self) -> XeResult<ModulePath> {
@@ -513,6 +632,7 @@ impl Parser {
         self.peek().map(|t| &t.kind).unwrap_or(&TokenKind::Eof)
     }
 
+    #[allow(dead_code)]
     fn peek_next_kind(&self) -> Option<&TokenKind> {
         self.tokens.get(self.pos + 1).map(|t| &t.kind)
     }
@@ -633,6 +753,8 @@ fn format_token_kind(kind: &TokenKind) -> &'static str {
         TokenKind::Continue => "continue",
         TokenKind::Import => "import",
         TokenKind::From => "from",
+        TokenKind::Struct => "struct",
+        TokenKind::Global => "global",
         TokenKind::Plus => "+",
         TokenKind::Minus => "-",
         TokenKind::Star => "*",
@@ -649,6 +771,8 @@ fn format_token_kind(kind: &TokenKind) -> &'static str {
         TokenKind::RightParen => ")",
         TokenKind::LeftBracket => "[",
         TokenKind::RightBracket => "]",
+        TokenKind::LeftBrace => "{",
+        TokenKind::RightBrace => "}",
         TokenKind::Colon => ":",
         TokenKind::Comma => ",",
         TokenKind::Dot => ".",

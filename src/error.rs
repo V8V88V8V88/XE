@@ -73,6 +73,11 @@ pub enum XeErrorKind {
     },
     DuplicateImport(String),
     ImportNameConflict(String),
+    GlobalOutsideFunction,
+    InvalidGlobal(String),
+    LocalUsedBeforeAssignment(String),
+    DuplicateParameter(String),
+    InvalidAssignmentTarget(String),
 
     // General
     IoError(String),
@@ -158,6 +163,18 @@ impl XeError {
                     name
                 )
             }
+            XeErrorKind::GlobalOutsideFunction => {
+                "'global' can only be used inside a function".to_string()
+            }
+            XeErrorKind::InvalidGlobal(msg) => msg.clone(),
+            XeErrorKind::LocalUsedBeforeAssignment(name) => format!(
+                "local variable '{0}' is used before it is assigned; '{0}' is assigned in this function, so it is local here. Add 'global {0}' to use the module-level variable",
+                name
+            ),
+            XeErrorKind::DuplicateParameter(name) => {
+                format!("duplicate parameter or field name '{}'", name)
+            }
+            XeErrorKind::InvalidAssignmentTarget(msg) => msg.clone(),
             XeErrorKind::IoError(msg) => format!("I/O error: {}", msg),
         }
     }

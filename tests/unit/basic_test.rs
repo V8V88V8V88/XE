@@ -643,7 +643,7 @@ fn test_runtime_error_for_invalid_length_argument() {
     assert!(result.is_err());
     assert!(result
         .unwrap_err()
-        .contains("Runtime error: length() expected text or list, got boolean"));
+        .contains("Runtime error: length() expected text, list, map, or struct, got boolean"));
 }
 
 #[test]
@@ -1321,3 +1321,358 @@ fn test_compile_does_not_destroy_existing_rs_file() {
     let _ = fs::remove_dir_all(&temp_dir);
 }
 
+#[test]
+fn test_map_creation_and_indexing() {
+    let code = r#"
+m = {"name": "Alice", "age": 30}
+print(m["name"])
+print(m["age"])
+print(length(m))
+"#;
+    let output = run_xe(code).unwrap();
+    assert_eq!(output, "Alice\n30\n2\n");
+}
+
+#[test]
+fn test_map_mutation_and_iteration() {
+    let code = r#"
+m = {"a": 1}
+m["b"] = 2
+m["a"] = 10
+print(m["a"], m["b"])
+for k in m:
+    print(k, m[k])
+"#;
+    let output = run_xe(code).unwrap();
+    assert_eq!(output, "10 2\na 10\nb 2\n");
+}
+
+#[test]
+fn test_list_index_mutation() {
+    let code = r#"
+arr = [10, 20, 30]
+arr[1] = 99
+print(arr[0], arr[1], arr[2])
+"#;
+    let output = run_xe(code).unwrap();
+    assert_eq!(output, "10 99 30\n");
+}
+
+#[test]
+fn test_struct_definition_and_access() {
+    let code = r#"
+struct Point:
+    x
+    y
+
+p = Point(10, 20)
+print(p.x, p.y)
+p.x = 42
+print(p.x, p.y)
+"#;
+    let output = run_xe(code).unwrap();
+    assert_eq!(output, "10 20\n42 20\n");
+}
+
+#[test]
+fn test_collection_builtins() {
+    let code = r#"
+nums = [1, 2]
+append(nums, 3)
+print(nums)
+last = pop(nums)
+print(last)
+print(nums)
+print(contains(nums, 2))
+print(contains(nums, 99))
+print(contains("hello world", "world"))
+
+words = split("cat,dog,bird", ",")
+print(words[0], words[1], words[2])
+joined = join(words, "-")
+print(joined)
+"#;
+    let output = run_xe(code).unwrap();
+    assert_eq!(output, "[1, 2, 3]\n3\n[1, 2]\ntrue\nfalse\ntrue\ncat dog bird\ncat-dog-bird\n");
+}
+
+#[test]
+fn test_map_builtins_keys_values_has_key() {
+    let code = r#"
+m = {"x": 10, "y": 20}
+print(has_key(m, "x"))
+print(has_key(m, "z"))
+ks = keys(m)
+print(ks[0], ks[1])
+vs = values(m)
+print(vs[0], vs[1])
+"#;
+    let output = run_xe(code).unwrap();
+    assert_eq!(output, "true\nfalse\nx y\n10 20\n");
+}
+
+#[test]
+fn test_struct_with_functions_and_methods() {
+    let code = r#"
+struct Person:
+    name
+    age
+
+fn celebrate_birthday(p):
+    p.age = p.age + 1
+    return p
+
+alice = Person("Alice", 25)
+print(alice.name, alice.age)
+alice2 = celebrate_birthday(alice)
+print(alice2.name, alice2.age)
+"#;
+    let output = run_xe(code).unwrap();
+    assert_eq!(output, "Alice 25\nAlice 26\n");
+}
+
+#[test]
+fn test_nested_collections_and_struct_equality() {
+    let code = r#"
+struct Vec2:
+    x
+    y
+
+v1 = Vec2(3, 4)
+v2 = Vec2(3, 4)
+v3 = Vec2(1, 2)
+print(v1 == v2)
+print(v1 == v3)
+
+m1 = {"a": 1, "b": 2}
+m2 = {"b": 2, "a": 1}
+print(m1 == m2)
+
+people = [
+    {"name": "Alpha", "pos": Vec2(0, 0)},
+    {"name": "Beta", "pos": Vec2(10, 20)}
+]
+print(people[0]["name"])
+p_pos = people[1]["pos"]
+print(p_pos.x, p_pos.y)
+"#;
+    let output = run_xe(code).unwrap();
+    assert_eq!(output, "true\nfalse\ntrue\nAlpha\n10 20\n");
+}
+
+
+
+#[test]
+fn test_function_mutating_global_list_is_visible_everywhere() {
+    let code = r#"
+items = []
+fun add(x):
+    append(items, x)
+add(1)
+add(2)
+print(items)
+"#;
+    assert_eq!(run_xe(code).unwrap(), "[1, 2]\n");
+}
+
+#[test]
+fn test_global_keyword_updates_module_variable() {
+    let code = r#"
+count = 0
+fun inc():
+    global count
+    count = count + 1
+inc()
+inc()
+print(count)
+
+fun init():
+    global config
+    config = "ready"
+init()
+print(config)
+"#;
+    assert_eq!(run_xe(code).unwrap(), "2\nready\n");
+}
+
+#[test]
+fn test_reading_global_before_local_assignment_is_compile_error() {
+    let code = r#"
+count = 0
+fun inc():
+    count = count + 1
+inc()
+"#;
+    let err = run_xe(code).unwrap_err();
+    assert!(err.contains("local variable 'count' is used before it is assigned"), "{}", err);
+    assert!(err.contains("global count"), "{}", err);
+}
+
+#[test]
+fn test_local_variable_can_shadow_global() {
+    let code = r#"
+i = 100
+fun f():
+    i = 0
+    while i < 3:
+        i = i + 1
+    return i
+print(f(), i)
+"#;
+    assert_eq!(run_xe(code).unwrap(), "3 100\n");
+}
+
+#[test]
+fn test_global_declaration_errors() {
+    let err = run_xe("global x\nx = 1\n").unwrap_err();
+    assert!(err.contains("'global' can only be used inside a function"), "{}", err);
+
+    let err = run_xe("fun f(a):\n    global a\n    a = 1\n").unwrap_err();
+    assert!(err.contains("cannot also be declared global"), "{}", err);
+}
+
+#[test]
+fn test_functions_see_globals_updated_in_top_level_blocks() {
+    let code = r#"
+total = 0
+items = []
+fun report():
+    print(total, items)
+i = 0
+while i < 3:
+    total = total + i
+    append(items, i)
+    i = i + 1
+report()
+"#;
+    assert_eq!(run_xe(code).unwrap(), "3 [0, 1, 2]\n");
+}
+
+#[test]
+fn test_global_used_before_assignment_is_runtime_error() {
+    let code = r#"
+fun show():
+    print(late)
+show()
+late = 1
+"#;
+    let err = run_xe(code).unwrap_err();
+    assert!(err.contains("variable 'late' was used before it was assigned"), "{}", err);
+}
+
+#[test]
+fn test_functions_without_return_value_produce_none() {
+    let code = r#"
+fun greet():
+    x = 1
+fun sign(n):
+    if n > 0:
+        return 1
+fun early(n):
+    if n == 0:
+        return
+    return n
+print(greet())
+print(sign(5), sign(-1))
+print(early(0), early(3))
+print(type(greet()))
+"#;
+    assert_eq!(run_xe(code).unwrap(), "none\n1 none\nnone 3\nnone\n");
+}
+
+#[test]
+fn test_text_length_counts_characters() {
+    let code = r#"
+s = "héllo"
+i = 0
+out = ""
+while i < length(s):
+    out = out + s[i]
+    i = i + 1
+print(length(s), out)
+"#;
+    assert_eq!(run_xe(code).unwrap(), "5 héllo\n");
+}
+
+#[test]
+fn test_large_and_fractional_numbers_print_exactly() {
+    let code = "print(100000000000000000000, 3.0, -0.0, 2.5)\n";
+    assert_eq!(run_xe(code).unwrap(), "100000000000000000000 3 0 2.5\n");
+}
+
+#[test]
+fn test_reassigning_parameters_and_dynamic_variables() {
+    let code = r#"
+fun clamp(n):
+    if n > 10:
+        n = 10
+    return n
+print(clamp(42), clamp(3))
+x = convert("5", "number")
+x = 7
+print(x + 1)
+nums = [1, 2]
+nums = []
+append(nums, 3)
+print(nums)
+"#;
+    assert_eq!(run_xe(code).unwrap(), "10 3\n8\n[3]\n");
+}
+
+#[test]
+fn test_nested_element_and_field_assignment() {
+    let code = r#"
+struct P:
+    x
+    y
+struct Holder:
+    p
+grid = [[0, 0], [0, 0]]
+grid[0][1] = 5
+fun mark(r, c):
+    grid[r][c] = 1
+mark(1, 1)
+append(grid[0], 7)
+print(grid)
+h = Holder(P(1, 2))
+h.p.x = 10
+data = {"inner": {"n": 1}}
+data["inner"]["n"] = 5
+print(h, data)
+"#;
+    assert_eq!(
+        run_xe(code).unwrap(),
+        "[[0, 5, 7], [0, 1]]\nHolder { p: P { x: 10, y: 2 } } {\"inner\": {\"n\": 5}}\n"
+    );
+}
+
+#[test]
+fn test_forward_calls_and_rust_reserved_names() {
+    let code = r#"
+fun f(x):
+    y = g(x)
+    z = h()
+    return y
+fun g(x):
+    return x * 2
+fun h():
+    x = 0
+fun keywords(unsafe, yield, None, self):
+    match = unsafe + yield + None + self
+    return match
+print(f(3), keywords(1, 2, 3, 4))
+"#;
+    assert_eq!(run_xe(code).unwrap(), "6 10\n");
+}
+
+#[test]
+fn test_invalid_targets_and_parameters_are_compile_errors() {
+    let err = run_xe("fun f(a, a):\n    return a\n").unwrap_err();
+    assert!(err.contains("duplicate parameter or field name 'a'"), "{}", err);
+
+    let err = run_xe("s = \"abc\"\ns[0] = \"z\"\n").unwrap_err();
+    assert!(err.contains("cannot assign to an element of a text value"), "{}", err);
+
+    let err = run_xe("xs = [1]\nappend(xs, \"a\")\n").unwrap_err();
+    assert!(err.contains("type mismatch"), "{}", err);
+}
