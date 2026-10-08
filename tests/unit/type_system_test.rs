@@ -2,6 +2,14 @@ use std::fs;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// The `xe` binary under test, with its build cache kept out of the user's cache.
+fn xe_command() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_xe"));
+    command.env("XE_CACHE_DIR", std::env::temp_dir().join("xe_test_cache"));
+    command
+}
+
+
 static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn get_unique_id() -> u64 {
@@ -16,7 +24,7 @@ fn run_xe(source: &str) -> Result<String, String> {
     let xe_file = temp_dir.join("input.xe");
     fs::write(&xe_file, source).map_err(|e| e.to_string())?;
 
-    let output = Command::new(env!("CARGO_BIN_EXE_xe"))
+    let output = xe_command()
         .arg("run")
         .arg(&xe_file)
         .output()

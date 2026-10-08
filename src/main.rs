@@ -25,7 +25,7 @@ fn print_usage() {
     eprintln!(
         "  xe install [--to <dir>]        Install the current XE binary into a local bin directory"
     );
-    eprintln!("  xe run <file.xe>               Compile and run the program");
+    eprintln!("  xe run <file.xe> [args...]     Compile and run the program (builds are cached)");
     eprintln!("  xe update                      Check for updates and install the latest version");
     eprintln!("  xe help                        Show this help message");
     eprintln!("  xe --version, -v               Show the version of the compiler");
@@ -588,6 +588,186 @@ fn install_binary(args: &[String]) {
     }
 }
 
+fn compile_or_exit(input_file: &Path) -> String {
+    match compile_path(input_file) {
+        Ok(code) => code,
+        Err(e) => {
+            print_compile_error(&e);
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Compiles generated Rust code into a native executable at `output`.
+/// rustc runs in a private directory because it writes intermediate files next to its
+/// output, which would collide between concurrent builds.
+fn build_binary(rustc: &Path, rust_code: &str, output: &Path) -> Result<(), String> {
+    let unique_id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let temp_dir = env::temp_dir().join(format!("xe_build_{}_{}", std::process::id(), unique_id));
+    fs::create_dir_all(&temp_dir).map_err(|e| format!("Error creating build directory: {}", e))?;
+    let source = temp_dir.join("main.rs");
+    let executable = temp_dir.join(if cfg!(windows) { "main.exe" } else { "main" });
+
+    let result = (|| {
+        fs::write(&source, rust_code).map_err(|e| format!("Error writing intermediate file: {}", e))?;
+        let output_result = Command::new(rustc)
+            .arg(&source)
+            .arg("-o")
+            .arg(&executable)
+            .arg("-C")
+            .arg("opt-level=3")
+            .arg("--edition")
+            .arg("2021")
+            .stderr(Stdio::piped())
+            .output()
+            .map_err(|e| format!("Error: Failed to run rustc: {}", e))?;
+        if !output_result.status.success() {
+            return Err(format!(
+                "Rust compilation failed:\n{}",
+                String::from_utf8_lossy(&output_result.stderr)
+            ));
+        }
+        move_file(&executable, output)
+            .map_err(|e| format!("Error writing '{}': {}", output.display(), e))
+    })();
+
+    clean_temp_dir(&temp_dir);
+    result
+}
+
+/// Renames a file, copying it when the destination is on another filesystem.
+fn move_file(from: &Path, to: &Path) -> io::Result<()> {
+    if fs::rename(from, to).is_ok() {
+        return Ok(());
+    }
+    fs::copy(from, to)?;
+    fs::remove_file(from)
+}
+
+/// An executable to run: either a cached build, or a temporary one deleted on drop.
+enum ProgramBinary {
+    Cached(PathBuf),
+    Temporary { dir: PathBuf, path: PathBuf },
+}
+
+impl ProgramBinary {
+    fn path(&self) -> &Path {
+        match self {
+            ProgramBinary::Cached(path) => path,
+            ProgramBinary::Temporary { path, .. } => path,
+        }
+    }
+}
+
+impl Drop for ProgramBinary {
+    fn drop(&mut self) {
+        if let ProgramBinary::Temporary { dir, .. } = self {
+            clean_temp_dir(dir);
+        }
+    }
+}
+
+const MAX_CACHED_BINARIES: usize = 50;
+
+fn cache_dir() -> Option<PathBuf> {
+    if let Some(dir) = env::var_os("XE_CACHE_DIR") {
+        return Some(PathBuf::from(dir));
+    }
+    #[cfg(windows)]
+    if let Some(local) = env::var_os("LOCALAPPDATA") {
+        return Some(PathBuf::from(local).join("xe").join("cache"));
+    }
+    if let Some(xdg) = env::var_os("XDG_CACHE_HOME") {
+        return Some(PathBuf::from(xdg).join("xe"));
+    }
+    env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache").join("xe"))
+}
+
+/// A key for the build cache: the generated code, the XE version and the rustc version.
+fn cache_key(rustc: &Path, rust_code: &str) -> String {
+    use std::hash::{Hash, Hasher};
+
+    let rustc_version = Command::new(rustc)
+        .arg("--version")
+        .output()
+        .map(|output| String::from_utf8_lossy(&output.stdout).to_string())
+        .unwrap_or_default();
+    // Two differently-salted 64-bit hashes make an accidental collision negligible.
+    [0u8, 1u8]
+        .iter()
+        .map(|salt| {
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            salt.hash(&mut hasher);
+            env!("CARGO_PKG_VERSION").hash(&mut hasher);
+            rustc_version.hash(&mut hasher);
+            rust_code.hash(&mut hasher);
+            format!("{:016x}", hasher.finish())
+        })
+        .collect()
+}
+
+/// Builds the program, reusing a cached executable when the same code was built before.
+fn cached_binary(rustc: &Path, rust_code: &str) -> Result<ProgramBinary, String> {
+    let executable_name = |stem: &str| {
+        if cfg!(windows) {
+            format!("{}.exe", stem)
+        } else {
+            stem.to_string()
+        }
+    };
+
+    if let Some(dir) = cache_dir().filter(|dir| fs::create_dir_all(dir).is_ok()) {
+        let key = cache_key(rustc, rust_code);
+        let cached = dir.join(executable_name(&key));
+        if cached.is_file() {
+            return Ok(ProgramBinary::Cached(cached));
+        }
+        let staging = dir.join(executable_name(&format!("{}.tmp{}", key, std::process::id())));
+        build_binary(rustc, rust_code, &staging)?;
+        if fs::rename(&staging, &cached).is_ok() {
+            prune_cache(&dir);
+            return Ok(ProgramBinary::Cached(cached));
+        }
+        let _ = fs::remove_file(&staging);
+    }
+
+    // No usable cache directory: build into a temporary directory.
+    let unique_id = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let dir = env::temp_dir().join(format!("xe_run_{}_{}", std::process::id(), unique_id));
+    fs::create_dir_all(&dir).map_err(|e| format!("Error creating temporary directory: {}", e))?;
+    let path = dir.join(executable_name("main"));
+    let program = ProgramBinary::Temporary { dir, path };
+    build_binary(rustc, rust_code, program.path())?;
+    Ok(program)
+}
+
+/// Keeps only the most recently built executables in the cache.
+fn prune_cache(dir: &Path) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let mut files: Vec<(std::time::SystemTime, PathBuf)> = entries
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let modified = entry.metadata().ok()?.modified().ok()?;
+            Some((modified, entry.path()))
+        })
+        .collect();
+    if files.len() <= MAX_CACHED_BINARIES {
+        return;
+    }
+    files.sort();
+    for (_, path) in &files[..files.len() - MAX_CACHED_BINARIES] {
+        let _ = fs::remove_file(path);
+    }
+}
+
 fn main() {
     let args: Vec<String> = env::args().collect();
 
@@ -616,138 +796,43 @@ fn main() {
                 std::process::exit(1);
             }
 
-            let input_file = Path::new(&args[2]);
-
-            match compile_path(input_file) {
-                Ok(rust_code) => {
-                    if args.len() == 3 {
-                        print!("{}", rust_code);
-                    } else if args.len() == 5 && args[3] == "-o" {
-                        let output_file = &args[4];
-                        let rustc = ensure_rustc_available();
-
-                        // Create a temporary .rs file safely in temp_dir
-                        let unique_id = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_nanos();
-                        let temp_rs = std::env::temp_dir().join(format!("xe_build_{}.rs", unique_id));
-                        if let Err(e) = fs::write(&temp_rs, &rust_code) {
-                            eprintln!("Error writing intermediate file: {}", e);
-                            std::process::exit(1);
-                        }
-
-                        // Call rustc to create the final binary
-                        let rustc_output = Command::new(&rustc)
-                            .arg(&temp_rs)
-                            .arg("-o")
-                            .arg(output_file)
-                            .arg("-C")
-                            .arg("opt-level=3")
-                            .arg("--edition")
-                            .arg("2021")
-                            .stderr(Stdio::piped())
-                            .output();
-
-                        // Clean up the temporary .rs file
-                        let _ = fs::remove_file(&temp_rs);
-
-                        match rustc_output {
-                            Ok(output) if output.status.success() => {
-                                eprintln!("Successfully compiled to binary: {}", output_file);
-                            }
-                            Ok(output) => {
-                                eprintln!("Rust compilation failed:");
-                                io::stderr().write_all(&output.stderr).unwrap();
-                                std::process::exit(1);
-                            }
-                            Err(e) => {
-                                eprintln!("Error: Failed to run rustc: {}", e);
-                                std::process::exit(1);
-                            }
-                        }
-                    } else {
-                        eprintln!("Error: Invalid compile arguments");
-                        eprintln!("Usage: xe compile <file.xe> [-o <output>]");
+            let rust_code = compile_or_exit(Path::new(&args[2]));
+            if args.len() == 3 {
+                print!("{}", rust_code);
+            } else if args.len() == 5 && args[3] == "-o" {
+                let rustc = ensure_rustc_available();
+                match build_binary(&rustc, &rust_code, Path::new(&args[4])) {
+                    Ok(()) => eprintln!("Successfully compiled to binary: {}", args[4]),
+                    Err(message) => {
+                        eprintln!("{}", message);
                         std::process::exit(1);
                     }
                 }
-                Err(e) => {
-                    print_compile_error(&e);
-                    std::process::exit(1);
-                }
+            } else {
+                eprintln!("Error: Invalid compile arguments");
+                eprintln!("Usage: xe compile <file.xe> [-o <output>]");
+                std::process::exit(1);
             }
         }
         "run" => {
             if args.len() < 3 {
                 eprintln!("Error: No input file specified");
-                eprintln!("Usage: xe run <file.xe>");
+                eprintln!("Usage: xe run <file.xe> [arguments...]");
                 std::process::exit(1);
             }
 
-            let input_file = Path::new(&args[2]);
-
-            let rust_code = match compile_path(input_file) {
-                Ok(code) => code,
-                Err(e) => {
-                    print_compile_error(&e);
-                    std::process::exit(1);
-                }
-            };
-
-            // Create temp directory for compilation
-            let unique_id = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
-            let temp_dir = std::env::temp_dir().join(format!("xe_run_{}", unique_id));
-            let _ = fs::create_dir_all(&temp_dir);
-
-            let rust_file = temp_dir.join("main.rs");
-            let exe_file = if cfg!(windows) {
-                temp_dir.join("main.exe")
-            } else {
-                temp_dir.join("main")
-            };
+            let rust_code = compile_or_exit(Path::new(&args[2]));
             let rustc = ensure_rustc_available();
-
-            // Write Rust code
-            if let Err(e) = fs::write(&rust_file, &rust_code) {
-                eprintln!("Error writing temp file: {}", e);
-                clean_temp_dir(&temp_dir);
-                std::process::exit(1);
-            }
-
-            // Compile with rustc
-            let compile_result = Command::new(&rustc)
-                .arg(&rust_file)
-                .arg("-o")
-                .arg(&exe_file)
-                .arg("-C")
-                .arg("opt-level=3")
-                .arg("--edition")
-                .arg("2021")
-                .stderr(Stdio::piped())
-                .output();
-
-            match compile_result {
-                Ok(output) => {
-                    if !output.status.success() {
-                        eprintln!("Rust compilation failed:");
-                        io::stderr().write_all(&output.stderr).unwrap();
-                        clean_temp_dir(&temp_dir);
-                        std::process::exit(1);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Failed to run rustc: {}", e);
-                    clean_temp_dir(&temp_dir);
+            let program = match cached_binary(&rustc, &rust_code) {
+                Ok(program) => program,
+                Err(message) => {
+                    eprintln!("{}", message);
                     std::process::exit(1);
                 }
-            }
+            };
 
-            // Run the executable
-            let run_result = Command::new(&exe_file)
+            let run_result = Command::new(program.path())
+                .args(&args[3..])
                 .stdin(Stdio::inherit())
                 .stdout(Stdio::inherit())
                 .stderr(Stdio::inherit())
@@ -760,8 +845,7 @@ fn main() {
                     1
                 }
             };
-
-            clean_temp_dir(&temp_dir);
+            drop(program);
             std::process::exit(exit_code);
         }
         _ => {

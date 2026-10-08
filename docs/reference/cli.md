@@ -6,22 +6,23 @@
 xe compile <file.xe>
 xe compile <file.xe> -o <output>
 xe install [--to <directory>]
-xe run <file.xe>
+xe run <file.xe> [arguments...]
 xe help
 ```
 
 ## `compile`
 
 - Without `-o`, prints generated Rust code to standard output
-- With `-o`, writes temporary Rust code and then invokes `rustc` to create a native executable
+- With `-o`, writes temporary Rust code in a private temporary directory and then invokes `rustc` to create a native executable
 - `compile -o` produces a binary, not a saved `.rs` source file
 - Extra arguments are rejected instead of being ignored
 
 ## `run`
 
-- Compiles the XE file
-- Builds a temporary executable with `rustc`
-- Runs the program immediately
+- Compiles the XE file and runs it immediately
+- Arguments after the file name are passed to the program
+- The program's exit code becomes `xe run`'s exit code
+- Compiled programs are cached, so running unchanged code again skips `rustc`. The cache lives in `$XE_CACHE_DIR`, or `~/.cache/xe` (`%LOCALAPPDATA%\xe\cache` on Windows), and keeps the 50 most recent builds
 
 ## Rust toolchain
 

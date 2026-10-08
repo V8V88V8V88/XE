@@ -2,6 +2,14 @@ use std::fs;
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// The `xe` binary under test, with its build cache kept out of the user's cache.
+fn xe_command() -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_xe"));
+    command.env("XE_CACHE_DIR", std::env::temp_dir().join("xe_test_cache"));
+    command
+}
+
+
 static TEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn get_unique_id() -> u64 {
@@ -14,7 +22,7 @@ fn compile_xe(source: &str) -> Result<String, String> {
     let temp_file = std::env::temp_dir().join(format!("test_input_{}.xe", id));
     fs::write(&temp_file, source).map_err(|e| e.to_string())?;
 
-    let output = Command::new(env!("CARGO_BIN_EXE_xe"))
+    let output = xe_command()
         .arg("compile")
         .arg(&temp_file)
         .output()
@@ -42,7 +50,7 @@ fn run_xe_with_input(source: &str, input: &str) -> Result<String, String> {
     fs::write(&xe_file, source).map_err(|e| e.to_string())?;
 
     use std::io::Write;
-    let mut child = Command::new(env!("CARGO_BIN_EXE_xe"))
+    let mut child = xe_command()
         .arg("run")
         .arg(&xe_file)
         .stdin(std::process::Stdio::piped())
@@ -80,7 +88,7 @@ fn compile_and_run_binary(source: &str) -> Result<String, String> {
         temp_dir.join("program")
     };
 
-    let compile_output = Command::new(env!("CARGO_BIN_EXE_xe"))
+    let compile_output = xe_command()
         .arg("compile")
         .arg(&xe_file)
         .arg("-o")
@@ -107,7 +115,7 @@ fn compile_and_run_binary(source: &str) -> Result<String, String> {
 }
 
 fn run_cli(args: &[&std::ffi::OsStr]) -> Result<String, String> {
-    let output = Command::new(env!("CARGO_BIN_EXE_xe"))
+    let output = xe_command()
         .args(args)
         .output()
         .map_err(|e| e.to_string())?;
@@ -137,7 +145,7 @@ fn run_xe_project(entry_file: &str, files: &[(&str, &str)]) -> Result<String, St
     let _ = fs::create_dir_all(&temp_dir);
     write_project_files(&temp_dir, files)?;
 
-    let output = Command::new(env!("CARGO_BIN_EXE_xe"))
+    let output = xe_command()
         .arg("run")
         .arg(temp_dir.join(entry_file))
         .output()
@@ -158,7 +166,7 @@ fn compile_xe_project(entry_file: &str, files: &[(&str, &str)]) -> Result<String
     let _ = fs::create_dir_all(&temp_dir);
     write_project_files(&temp_dir, files)?;
 
-    let output = Command::new(env!("CARGO_BIN_EXE_xe"))
+    let output = xe_command()
         .arg("compile")
         .arg(temp_dir.join(entry_file))
         .output()
@@ -188,7 +196,7 @@ fn compile_and_run_project_binary(
         temp_dir.join("program")
     };
 
-    let compile_output = Command::new(env!("CARGO_BIN_EXE_xe"))
+    let compile_output = xe_command()
         .arg("compile")
         .arg(temp_dir.join(entry_file))
         .arg("-o")
@@ -781,7 +789,7 @@ fn test_install_command_copies_executable() {
     let temp_dir = std::env::temp_dir().join(format!("xe_install_test_{}", id));
     let install_dir = temp_dir.join("bin");
 
-    let install_output = Command::new(env!("CARGO_BIN_EXE_xe"))
+    let install_output = xe_command()
         .arg("install")
         .arg("--to")
         .arg(&install_dir)
@@ -1304,7 +1312,7 @@ fn test_compile_does_not_destroy_existing_rs_file() {
 
     let binary_output = temp_dir.join("program");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_xe"))
+    let output = xe_command()
         .arg("compile")
         .arg(&xe_file)
         .arg("-o")
