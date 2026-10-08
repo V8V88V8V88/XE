@@ -1,6 +1,6 @@
 # Project Status
 
-XE is in **pre-alpha** (v0.1.5). While the compiler is stable enough for experimentation and learning, it is not yet intended for production use.
+XE is in **pre-alpha** (v0.2.0). While the compiler is stable enough for experimentation and learning, it is not yet intended for production use.
 
 ## Current Capabilities
 
@@ -15,7 +15,7 @@ The compiler provides a complete pipeline from `.xe` source to a native binary, 
 *   **Functions as Values**: Functions can be passed around and returned, and `lambda` creates anonymous functions.
 *   **Developer Interface**: The `xe` CLI manages the full workflow: `xe run` for rapid testing, `xe compile` for optimized builds, and `xe install` to manage the environment.
 
-## Unreleased
+## New in v0.2.0
 
 *   **Python-style Values and Scope**: Lists, maps and structs are shared references; variables assigned inside `if`/loop blocks stay visible after them; reading a variable that might not be assigned is a compile error.
 *   **Faster Programs**: Variable reads no longer copy lists, function parameters and return values get native types when calls agree, and `for i in range(n)` is a native loop. Summing a 20,000-item list by index went from 7.6 s to under 0.01 s, and `fib(32)` from 0.17 s to 0.013 s.
