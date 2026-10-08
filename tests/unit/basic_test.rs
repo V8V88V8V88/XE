@@ -1171,6 +1171,71 @@ fn test_unit_converter() {
 }
 
 #[test]
+fn test_word_count_example() {
+    let source = fs::read_to_string("examples/word_count.xe").unwrap();
+    let output = run_xe(&source).unwrap();
+    assert!(output.contains("Words: 15 - unique: 10"), "{}", output);
+    assert!(output.contains("the: 4\nfox: 2\ndog: 2"), "{}", output);
+    assert!(output.contains("Used once: brown, jumps, lazy, over, quick, runs, sleeps"), "{}", output);
+}
+
+#[test]
+fn test_bank_account_example() {
+    let source = fs::read_to_string("examples/bank_account.xe").unwrap();
+    let output = run_xe(&source).unwrap();
+    assert!(output.contains("Alice 70 | Bob 50"), "{}", output);
+    assert!(output.contains("failed for Bob: insufficient funds: balance is 50"), "{}", output);
+    assert!(output.contains("failed for Alice: deposit must be positive"), "{}", output);
+    assert!(output.contains("ok: Alice now has 20"), "{}", output);
+}
+
+#[test]
+fn test_functional_example() {
+    let source = fs::read_to_string("examples/functional.xe").unwrap();
+    let output = run_xe(&source).unwrap();
+    assert!(output.contains("evens: [2, 4, 6, 8, 10]"), "{}", output);
+    assert!(output.contains("triple(4) = 12 - square(triple(4)) = 144"), "{}", output);
+    assert!(output.contains("[\"XE\", \"LAMBDA\", \"MAP\"] [2, 6, 3]"), "{}", output);
+    assert!(output.contains("pow 32"), "{}", output);
+}
+
+#[test]
+fn test_game_of_life_example() {
+    let source = fs::read_to_string("examples/game_of_life.xe").unwrap();
+    let output = run_xe(&source).unwrap();
+    // The glider after three generations.
+    assert!(
+        output.contains("Generation 3\n......\n.#....\n..##..\n.##...\n"),
+        "{}",
+        output
+    );
+}
+
+#[test]
+fn test_journal_example() {
+    let id = get_unique_id();
+    let journal = std::env::temp_dir().join(format!("xe_journal_test_{}.txt", id));
+    let _ = fs::remove_file(&journal);
+    let run = |entries: &[&str]| {
+        let output = xe_command()
+            .arg("run")
+            .arg("examples/journal.xe")
+            .arg(&journal)
+            .args(entries)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8_lossy(&output.stdout).to_string()
+    };
+
+    let first = run(&["first"]);
+    assert!(first.contains("Added 1 entry\nThe journal has 1 entry:"), "{}", first);
+    let second = run(&["second", "third"]);
+    assert!(second.contains("The journal has 3 entries:\n1. first\n2. second\n3. third"), "{}", second);
+    let _ = fs::remove_file(&journal);
+}
+
+#[test]
 fn test_list_equality_and_inequality() {
     let output = run_xe(
         r#"

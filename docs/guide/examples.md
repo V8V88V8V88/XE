@@ -418,3 +418,341 @@ while y <= size:
     print(row)
     y = y + 1
 ```
+
+## Language Features in Action
+
+These examples show the features added in XE 0.2.0.
+
+### Word Counter
+
+Source: `examples/word_count.xe`
+
+Counts words in a text: text functions (`lower`, `replace`, `split`), a map that keeps words in the order they first appeared, `in`, `+=`, slicing, and `sort`.
+
+```xe
+# Word counter: text functions, maps that keep insertion order, and sorting.
+
+text = "The quick brown fox jumps over the lazy dog. The dog sleeps, the fox runs!"
+
+# Normalize: lowercase and strip punctuation
+clean = lower(text)
+for mark in [".", ",", "!", "?"]:
+    clean = replace(clean, mark, "")
+
+words = clean.split()
+counts = {}
+for word in words:
+    if word in counts:
+        counts[word] += 1
+    else:
+        counts[word] = 1
+
+print("Words:", length(words), "- unique:", length(counts))
+
+# Words in the order they first appeared
+print("First seen:", keys(counts)[:5])
+
+# The three most common words
+remaining = copy(counts)
+repeat 3 times:
+    best = none
+    for word in remaining:
+        if best == none or remaining[word] > remaining[best]:
+            best = word
+    print(best + ":", remaining[best])
+    remove(remaining, best)
+
+# Alphabetical list of words used once
+once = []
+for word in counts:
+    if counts[word] == 1:
+        once.append(word)
+print("Used once:", join(sort(once), ", "))
+```
+
+Output:
+
+```text
+Words: 15 - unique: 10
+First seen: ["the", "quick", "brown", "fox", "jumps"]
+the: 4
+fox: 2
+dog: 2
+Used once: brown, jumps, lazy, over, quick, runs, sleeps
+```
+
+### Bank Account
+
+Source: `examples/bank_account.xe`
+
+Structs with a list field, shared values (functions change the account passed to them), and `try` / `catch` with `error(...)` so one failed request does not stop the program.
+
+```xe
+# Bank account: structs, shared values, and error handling with try / catch.
+
+struct Account:
+    owner
+    balance
+    history
+
+fun open_account(owner, amount):
+    return Account(owner, amount, ["opened with " + convert(amount, "text")])
+
+fun deposit(account, amount):
+    if amount <= 0:
+        error("deposit must be positive")
+    account.balance += amount
+    account.history.append("deposit " + convert(amount, "text"))
+
+fun withdraw(account, amount):
+    if amount > account.balance:
+        error("insufficient funds: balance is " + convert(account.balance, "text"))
+    account.balance -= amount
+    account.history.append("withdraw " + convert(amount, "text"))
+
+fun transfer(source, target, amount):
+    withdraw(source, amount)
+    deposit(target, amount)
+
+alice = open_account("Alice", 100)
+bob = open_account("Bob", 20)
+
+transfer(alice, bob, 30)
+print(alice.owner, alice.balance, "|", bob.owner, bob.balance)
+
+# Each request either succeeds or is reported, and the program keeps going
+requests = [
+    {"account": bob, "action": "withdraw", "amount": 500},
+    {"account": alice, "action": "deposit", "amount": -5},
+    {"account": alice, "action": "withdraw", "amount": 50}
+]
+for request in requests:
+    account = request.account
+    try:
+        if request.action == "deposit":
+            deposit(account, request.amount)
+        else:
+            withdraw(account, request.amount)
+        print("ok:", account.owner, "now has", account.balance)
+    catch err:
+        print("failed for", account.owner + ":", err)
+
+print("Alice history:", alice.history)
+```
+
+Output:
+
+```text
+Alice 70 | Bob 50
+failed for Bob: insufficient funds: balance is 50
+failed for Alice: deposit must be positive
+ok: Alice now has 20
+Alice history: ["opened with 100", "withdraw 30", "withdraw 50"]
+```
+
+### Functional Toolkit
+
+Source: `examples/functional.xe`
+
+Functions as values: `map`, `filter` and `reduce` written in XE, functions that return functions (`make_multiplier`, `compose`), built-ins passed as values, and a map of lambdas.
+
+```xe
+# Functions are values: pass them around, return them, and write them inline with lambda.
+
+fun map_list(f, items):
+    out = []
+    for item in items:
+        out.append(f(item))
+    return out
+
+fun filter_list(keep, items):
+    out = []
+    for item in items:
+        if keep(item):
+            out.append(item)
+    return out
+
+fun reduce(f, items, start):
+    total = start
+    for item in items:
+        total = f(total, item)
+    return total
+
+fun compose(f, g):
+    return lambda x: f(g(x))
+
+fun make_multiplier(factor):
+    return lambda x: x * factor
+
+numbers = range(1, 11)
+
+squares = map_list(lambda n: n ** 2, numbers)
+evens = filter_list(lambda n: n % 2 == 0, numbers)
+total = reduce(lambda a, b: a + b, numbers, 0)
+print("squares:", squares)
+print("evens:", evens)
+print("sum:", total, "- same as sum():", sum(numbers))
+
+triple = make_multiplier(3)
+triple_then_square = compose(lambda x: x * x, triple)
+print("triple(4) =", triple(4), "- square(triple(4)) =", triple_then_square(4))
+
+# Built-in functions are values too
+words = ["xe", "lambda", "map"]
+print(map_list(upper, words), map_list(length, words))
+
+# A table of operations
+operations = {
+    "add": lambda a, b: a + b,
+    "sub": lambda a, b: a - b,
+    "pow": lambda a, b: a ** b
+}
+for name in operations:
+    print(name, operations[name](2, 5))
+```
+
+Output:
+
+```text
+squares: [1, 4, 9, 16, 25, 36, 49, 64, 81, 100]
+evens: [2, 4, 6, 8, 10]
+sum: 55 - same as sum(): 55
+triple(4) = 12 - square(triple(4)) = 144
+["XE", "LAMBDA", "MAP"] [2, 6, 3]
+add 7
+sub -3
+pow 32
+```
+
+### Journal
+
+Source: `examples/journal.xe`
+
+Reads command-line arguments with `args()` and keeps a journal in a text file with `file_exists`, `write_file`, `append_file` and `read_file`.
+
+```xe
+# Journal: files and command-line arguments.
+# Usage: xe run examples/journal.xe <file> [entry...]
+
+fun count_of(n, singular, plural):
+    if n == 1:
+        return "1 " + singular
+    return convert(n, "text") + " " + plural
+
+if length(args()) == 0:
+    print("usage: xe run examples/journal.xe <file> [entry...]")
+    exit(1)
+
+path = args()[0]
+entries = args()[1:]
+
+if not file_exists(path):
+    write_file(path, "# Journal\n")
+    print("Created", path)
+
+for entry in entries:
+    append_file(path, "- " + entry + "\n")
+print("Added", count_of(length(entries), "entry", "entries"))
+
+lines = split(trim(read_file(path)), "\n")
+items = lines[1:]
+print("The journal has", count_of(length(items), "entry", "entries") + ":")
+for i in range(length(items)):
+    print(convert(i + 1, "text") + ".", items[i][2:])
+```
+
+Run it with a file name and some entries:
+
+```bash
+xe run examples/journal.xe journal.txt "learned XE" "wrote a parser"
+xe run examples/journal.xe journal.txt "fixed a bug"
+```
+
+Output of the second run:
+
+```text
+Added 1 entry
+The journal has 3 entries:
+1. learned XE
+2. wrote a parser
+3. fixed a bug
+```
+
+### Game of Life
+
+Source: `examples/game_of_life.xe`
+
+Conway's Game of Life on a small board: nested lists, `range`, `continue`, and `%` that wraps negative numbers around (`(0 - 1) % 6` is `5`).
+
+```xe
+# Conway's Game of Life: nested lists, range, and a board that wraps around.
+
+fun make_board(rows, cols, cells):
+    board = []
+    for r in range(rows):
+        row = []
+        for c in range(cols):
+            row.append([r, c] in cells)
+        board.append(row)
+    return board
+
+fun live_neighbours(board, r, c):
+    rows = length(board)
+    cols = length(board[0])
+    count = 0
+    for dr in [-1, 0, 1]:
+        for dc in [-1, 0, 1]:
+            if dr == 0 and dc == 0:
+                continue
+            # % wraps around: (0 - 1) % rows is the last row
+            if board[(r + dr) % rows][(c + dc) % cols]:
+                count += 1
+    return count
+
+fun step(board):
+    next_board = []
+    for r in range(length(board)):
+        row = []
+        for c in range(length(board[r])):
+            n = live_neighbours(board, r, c)
+            alive = board[r][c]
+            row.append(n == 3 or (alive and n == 2))
+        next_board.append(row)
+    return next_board
+
+fun show(board, generation):
+    print("Generation", generation)
+    for row in board:
+        line = ""
+        for cell in row:
+            if cell:
+                line += "#"
+            else:
+                line += "."
+        print(line)
+
+glider = [[0, 1], [1, 2], [2, 0], [2, 1], [2, 2]]
+board = make_board(6, 6, glider)
+for generation in range(4):
+    show(board, generation)
+    board = step(board)
+```
+
+The first two generations of the output:
+
+```text
+Generation 0
+.#....
+..#...
+###...
+......
+......
+......
+Generation 1
+......
+#.#...
+.##...
+.#....
+......
+......
+```

@@ -1,0 +1,38 @@
+# Word counter: text functions, maps that keep insertion order, and sorting.
+
+text = "The quick brown fox jumps over the lazy dog. The dog sleeps, the fox runs!"
+
+# Normalize: lowercase and strip punctuation
+clean = lower(text)
+for mark in [".", ",", "!", "?"]:
+    clean = replace(clean, mark, "")
+
+words = clean.split()
+counts = {}
+for word in words:
+    if word in counts:
+        counts[word] += 1
+    else:
+        counts[word] = 1
+
+print("Words:", length(words), "- unique:", length(counts))
+
+# Words in the order they first appeared
+print("First seen:", keys(counts)[:5])
+
+# The three most common words
+remaining = copy(counts)
+repeat 3 times:
+    best = none
+    for word in remaining:
+        if best == none or remaining[word] > remaining[best]:
+            best = word
+    print(best + ":", remaining[best])
+    remove(remaining, best)
+
+# Alphabetical list of words used once
+once = []
+for word in counts:
+    if counts[word] == 1:
+        once.append(word)
+print("Used once:", join(sort(once), ", "))

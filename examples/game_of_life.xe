@@ -1,0 +1,51 @@
+# Conway's Game of Life: nested lists, range, and a board that wraps around.
+
+fun make_board(rows, cols, cells):
+    board = []
+    for r in range(rows):
+        row = []
+        for c in range(cols):
+            row.append([r, c] in cells)
+        board.append(row)
+    return board
+
+fun live_neighbours(board, r, c):
+    rows = length(board)
+    cols = length(board[0])
+    count = 0
+    for dr in [-1, 0, 1]:
+        for dc in [-1, 0, 1]:
+            if dr == 0 and dc == 0:
+                continue
+            # % wraps around: (0 - 1) % rows is the last row
+            if board[(r + dr) % rows][(c + dc) % cols]:
+                count += 1
+    return count
+
+fun step(board):
+    next_board = []
+    for r in range(length(board)):
+        row = []
+        for c in range(length(board[r])):
+            n = live_neighbours(board, r, c)
+            alive = board[r][c]
+            row.append(n == 3 or (alive and n == 2))
+        next_board.append(row)
+    return next_board
+
+fun show(board, generation):
+    print("Generation", generation)
+    for row in board:
+        line = ""
+        for cell in row:
+            if cell:
+                line += "#"
+            else:
+                line += "."
+        print(line)
+
+glider = [[0, 1], [1, 2], [2, 0], [2, 1], [2, 2]]
+board = make_board(6, 6, glider)
+for generation in range(4):
+    show(board, generation)
+    board = step(board)

@@ -1,0 +1,28 @@
+# Journal: files and command-line arguments.
+# Usage: xe run examples/journal.xe <file> [entry...]
+
+fun count_of(n, singular, plural):
+    if n == 1:
+        return "1 " + singular
+    return convert(n, "text") + " " + plural
+
+if length(args()) == 0:
+    print("usage: xe run examples/journal.xe <file> [entry...]")
+    exit(1)
+
+path = args()[0]
+entries = args()[1:]
+
+if not file_exists(path):
+    write_file(path, "# Journal\n")
+    print("Created", path)
+
+for entry in entries:
+    append_file(path, "- " + entry + "\n")
+print("Added", count_of(length(entries), "entry", "entries"))
+
+lines = split(trim(read_file(path)), "\n")
+items = lines[1:]
+print("The journal has", count_of(length(items), "entry", "entries") + ":")
+for i in range(length(items)):
+    print(convert(i + 1, "text") + ".", items[i][2:])

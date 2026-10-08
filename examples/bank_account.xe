@@ -1,0 +1,50 @@
+# Bank account: structs, shared values, and error handling with try / catch.
+
+struct Account:
+    owner
+    balance
+    history
+
+fun open_account(owner, amount):
+    return Account(owner, amount, ["opened with " + convert(amount, "text")])
+
+fun deposit(account, amount):
+    if amount <= 0:
+        error("deposit must be positive")
+    account.balance += amount
+    account.history.append("deposit " + convert(amount, "text"))
+
+fun withdraw(account, amount):
+    if amount > account.balance:
+        error("insufficient funds: balance is " + convert(account.balance, "text"))
+    account.balance -= amount
+    account.history.append("withdraw " + convert(amount, "text"))
+
+fun transfer(source, target, amount):
+    withdraw(source, amount)
+    deposit(target, amount)
+
+alice = open_account("Alice", 100)
+bob = open_account("Bob", 20)
+
+transfer(alice, bob, 30)
+print(alice.owner, alice.balance, "|", bob.owner, bob.balance)
+
+# Each request either succeeds or is reported, and the program keeps going
+requests = [
+    {"account": bob, "action": "withdraw", "amount": 500},
+    {"account": alice, "action": "deposit", "amount": -5},
+    {"account": alice, "action": "withdraw", "amount": 50}
+]
+for request in requests:
+    account = request.account
+    try:
+        if request.action == "deposit":
+            deposit(account, request.amount)
+        else:
+            withdraw(account, request.amount)
+        print("ok:", account.owner, "now has", account.balance)
+    catch err:
+        print("failed for", account.owner + ":", err)
+
+print("Alice history:", alice.history)

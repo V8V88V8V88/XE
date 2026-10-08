@@ -1,0 +1,52 @@
+# Functions are values: pass them around, return them, and write them inline with lambda.
+
+fun map_list(f, items):
+    out = []
+    for item in items:
+        out.append(f(item))
+    return out
+
+fun filter_list(keep, items):
+    out = []
+    for item in items:
+        if keep(item):
+            out.append(item)
+    return out
+
+fun reduce(f, items, start):
+    total = start
+    for item in items:
+        total = f(total, item)
+    return total
+
+fun compose(f, g):
+    return lambda x: f(g(x))
+
+fun make_multiplier(factor):
+    return lambda x: x * factor
+
+numbers = range(1, 11)
+
+squares = map_list(lambda n: n ** 2, numbers)
+evens = filter_list(lambda n: n % 2 == 0, numbers)
+total = reduce(lambda a, b: a + b, numbers, 0)
+print("squares:", squares)
+print("evens:", evens)
+print("sum:", total, "- same as sum():", sum(numbers))
+
+triple = make_multiplier(3)
+triple_then_square = compose(lambda x: x * x, triple)
+print("triple(4) =", triple(4), "- square(triple(4)) =", triple_then_square(4))
+
+# Built-in functions are values too
+words = ["xe", "lambda", "map"]
+print(map_list(upper, words), map_list(length, words))
+
+# A table of operations
+operations = {
+    "add": lambda a, b: a + b,
+    "sub": lambda a, b: a - b,
+    "pow": lambda a, b: a ** b
+}
+for name in operations:
+    print(name, operations[name](2, 5))
