@@ -20,15 +20,21 @@ Keywords are reserved words that have a special meaning in XE. They cannot be us
 | `times` | Loops | Used in the `repeat` loop syntax |
 | `break` | Loops | Exit the current loop immediately |
 | `continue` | Loops | Skip to the next iteration of the loop |
+| `pass` | Control Flow | A statement that does nothing, for empty blocks |
+| `try` | Errors | Run a block and handle runtime errors in it |
+| `catch` | Errors | The block that runs when a `try` block fails |
 | `and` | Logic | Logical AND operator |
 | `or` | Logic | Logical OR operator |
-| `not` | Logic | Logical NOT operator |
+| `not` | Logic | Logical NOT operator (also part of `not in`) |
 | `true` | Literals | Boolean true value |
 | `false` | Literals | Boolean false value |
+| `none` | Literals | The absence of a value |
 | `return` | Functions | Return a value from a function |
 | `global` | Functions | Let a function assign to a module-level variable |
+| `lambda` | Functions | Create an anonymous function: `lambda x: x * 2` |
 | `import` | Modules | Import an entire module |
 | `from` | Modules | Import specific names from a module |
+| `as` | Modules | Rename an import: `import helpers as h` |
 
 ## Details by Category
 
@@ -47,6 +53,14 @@ Keywords are reserved words that have a special meaning in XE. They cannot be us
 ### Control Flow
 
 - **`if`**, **`elif`**, **`else`**: Used to build decision logic. XE requires a colon `:` after the condition and an indented block for the body.
+- **`pass`**: Does nothing; use it where a block is required but there is nothing to do.
+- **`try`**, **`catch`**: Handle runtime errors. Example:
+  ```xe
+  try:
+      n = convert("abc", "number")
+  catch err:
+      print("failed:", err)
+  ```
 
 ### Loops
 
@@ -60,12 +74,13 @@ Keywords are reserved words that have a special meaning in XE. They cannot be us
 
 - **`and`**: Returns true if both operands are true.
 - **`or`**: Returns true if at least one operand is true.
-- **`not`**: Inverts a boolean value.
+- **`not`**: Inverts the truthiness of a value. `x not in items` checks that `x` is absent.
 
 ### Module System
 
-- **`import`**: Used to load another `.xe` file as a module.
-- **`from`**: Used to pull specific functions out of a module into the current namespace.
+- **`import`**: Loads another `.xe` file as a module; its members are used as `module.name`.
+- **`from`**: Pulls specific functions, structs or variables out of a module into the current namespace.
+- **`as`**: Gives an imported module or name a different local name.
 
 ## Reserved Word Rule
 

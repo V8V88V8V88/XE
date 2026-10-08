@@ -1,19 +1,19 @@
 # Types and Values
 
-XE uses an **inferred type system** with a **Typed IR**. The compiler tries to map variables directly to native Rust types for performance, falling back to a dynamic `XeValue` box when types are mixed or unknown.
+XE infers types. Numbers, text and booleans whose types are known are compiled to native Rust values (`f64`, `String`, `bool`); values whose type can vary are stored dynamically and checked at runtime.
 
 ## Value kinds
 
-XE has six primary runtime value kinds:
-
 | Type | Example | Notes |
 | --- | --- | --- |
-| `number` | `42`, `3.14` | Stored as numeric runtime values |
-| `text` | `"hello"` | Double-quoted strings |
-| `boolean` | `true`, `false` | Used directly in conditions |
-| `list` | `[1, 2, 3]` | Ordered collections with zero-based indexing and mutation |
-| `map` | `{"a": 1, "b": 2}` | Key-value dictionary collections |
-| `struct` | `Point(10, 20)` | User-defined composite structures with named fields |
+| `number` | `42`, `3.14` | 64-bit floating point |
+| `text` | `"hello"` | Double-quoted; immutable |
+| `boolean` | `true`, `false` | |
+| `none` | `none` | The absence of a value |
+| `list` | `[1, 2, 3]` | Ordered, mutable, zero-based |
+| `map` | `{"a": 1, "b": 2}` | Key-value pairs in insertion order |
+| `struct` | `Point(10, 20)` | User-defined records with named fields |
+| `function` | `print`, `lambda x: x + 1` | Functions are values |
 
 Check a value's runtime type with `type(...)`:
 
@@ -22,168 +22,151 @@ print(type(42))
 print(type("XE"))
 print(type([1, 2, 3]))
 print(type({"a": 1}))
+print(type(none))
 ```
 
-## Variables are mutable
-
-XE currently has variables, not constants.
+## Variables
 
 ```xe
 score = 10
 score = score + 5
+score += 5
 print(score)
 ```
 
-There is no separate `const` keyword right now. Reassignment is allowed unless the name is out of scope.
+A variable's type is fixed by its first assignment: after `score = 10`, assigning text to `score` is a compile error. There is no `const` keyword yet.
 
 ## Numbers
 
-Numbers support:
-
-- `+`
-- `-`
-- `*`
-- `/`
-- `%`
+Numbers support `+`, `-`, `*`, `/`, `//` (divide and round down), `%` and `**` (power):
 
 ```xe
-price = 99.5
-tax = 0.5
-print(price + tax)
+print(7 / 2, 7 // 2, 7 % 3, 2 ** 10) # 3.5 3 1 1024
+print(-7 // 2, -7 % 3)               # -4 2
 ```
 
 Division and modulo by zero raise runtime errors instead of silently returning fallback values.
 
+Math functions: `abs`, `floor`, `ceil`, `sqrt`, `round(x)`, `round(x, digits)`, `min`, `max`, `sum`, `random()`.
+
 ## Text
 
-Text values use double quotes.
+Text values use double quotes. Escapes: `\n`, `\t`, `\r`, `\\`, `\"`.
 
 ```xe
 name = "XE"
 print("Hello " + name)
+print("Count: " + 3) # + converts the other value to text
 ```
 
-`+` also performs concatenation if either operand is text.
+Text can be indexed and sliced by character, and compared alphabetically:
 
 ```xe
-print("Count: " + 3)
+word = "héllo"
+print(length(word), word[1], word[-1], word[1:3]) # 5 é o él
+print("apple" < "banana")                        # true
 ```
 
-That produces text output.
+Text functions: `upper`, `lower`, `trim`, `replace(text, old, new)`, `split(text)`, `split(text, separator)`, `join(list, separator)`, `starts_with`, `ends_with`, `find(text, part)`. Text cannot be changed in place; these return new text.
 
 ## Booleans and truthiness
 
-Boolean literals are:
-
-- `true`
-- `false`
-
-Conditions also use truthiness rules:
-
-- `0` is falsey
-- non-zero numbers are truthy
-- `""` is falsey
-- non-empty text is truthy
-- `[]` is falsey
-- non-empty lists are truthy
-
-Example:
+Any value can be used as a condition. `false`, `none`, `0`, `""`, `[]` and `{}` are false; everything else is true.
 
 ```xe
 if [1, 2]:
     print("non-empty lists are truthy")
 ```
 
-## Lists
+## none
 
-Lists are array-like collections backed by Rust `Vec`, so indexing is natural and efficient.
+`none` means "no value". Functions without a `return` value return it:
+
+```xe
+fun log(message):
+    print(message)
+
+result = log("hi")
+print(result == none) # true
+```
+
+## Lists
 
 ```xe
 items = [10, 20, 30]
-print(items[0])
+print(items[0], items[-1]) # 10 30
+print(items[1:])           # [20, 30]
 print(length(items))
 
-# Index mutation
 items[1] = 99
-print(items) # [10, 99, 30]
-
-# Collection operations
-append(items, 40)
-print(items) # [10, 99, 30, 40]
-
-last = pop(items)
-print(last) # 40
-
-print(contains(items, 99)) # true
+items.append(40)           # same as append(items, 40)
+last = items.pop()         # 40
+items.insert(0, 5)
+print(items)               # [5, 10, 99, 30]
+print(99 in items)         # true
+print(items.sort())        # sorts in place: [5, 10, 30, 99]
 ```
 
-String utility functions:
+Other list functions: `remove(list, value)`, `reverse(list)`, `copy(list)`, `sum(list)`, `min(list)`, `max(list)`, `range(...)`.
+
+### Lists are shared
+
+Assigning a list or passing it to a function does not copy it, as in Python:
 
 ```xe
-words = split("cat,dog,bird", ",")
-print(words[0], words[1]) # cat dog
+fun add_item(list):
+    list.append("new")
 
-joined = join(words, "-")
-print(joined) # cat-dog-bird
+a = []
+b = a
+add_item(b)
+print(a) # ["new"]
 ```
 
-## Maps (Dictionaries)
+Use `copy(list)` when you need an independent copy. The same applies to maps and structs.
 
-Maps store key-value associations with text keys:
+## Maps
+
+Map keys can be numbers, text or booleans; `1` and `"1"` are different keys. Maps keep insertion order.
 
 ```xe
 user = {
     "name": "Alice",
-    "age": 30,
-    "admin": true
+    "age": 30
 }
 
-# Key access & mutation
-print(user["name"])
-user["age"] = 31
+print(user["name"], user.name) # text keys can also be read like fields
+user["age"] += 1
+user["admin"] = true
 
-# Map built-ins
-print(has_key(user, "name")) # true
-ks = keys(user)
-vs = values(user)
+print(has_key(user, "age"), "age" in user)
+print(keys(user))   # ["name", "age", "admin"]
+remove(user, "admin")
 
-# Map iteration (iterates over keys)
-for k in user:
-    print(k, user[k])
+for key in user:
+    print(key, user[key])
 ```
 
 ## Structs
-
-User-defined structs provide typed composite data modeling with named fields:
 
 ```xe
 struct Point:
     x
     y
 
-# Constructor instantiation
 p = Point(10, 20)
-
-# Field access and mutation
 print(p.x, p.y) # 10 20
 p.x = 42
-print(p.x, p.y) # 42 20
+print(p)        # Point { x: 42, y: 20 }
 
-# Value-based structural equality
-p1 = Point(1, 2)
-p2 = Point(1, 2)
-print(p1 == p2) # true
+print(Point(1, 2) == Point(1, 2)) # true: structs compare by value
 ```
+
+Assigning a field that the struct does not declare is an error.
 
 ## Conversion rules
 
 `convert(value, target)` supports three targets:
-
-- `"number"`
-- `"text"`
-- `"boolean"`
-
-Examples:
 
 ```xe
 print(convert("42", "number"))
@@ -191,35 +174,22 @@ print(convert(123, "text"))
 print(convert("", "boolean"))
 ```
 
-Current behavior:
-
-- text to number must parse successfully
-- invalid text-to-number conversion fails at runtime
-- booleans convert to `1` or `0` when targeting `"number"`
-- lists cannot be converted to numbers
+- text to number must parse successfully; otherwise it is a runtime error
+- booleans convert to `1` or `0`
+- `"boolean"` uses truthiness
 
 ## Equality and comparison
 
-Comparison operators:
+- `==` and `!=` compare values deeply. Values of different kinds are never equal: `true == 1` is `false`.
+- `<`, `>`, `<=` and `>=` compare two numbers or two texts. Comparing a number with text is an error.
 
-- `==`
-- `!=`
-- `<`
-- `>`
-- `<=`
-- `>=`
+## Printing
 
-Ordering comparisons (`<`, `>`, `<=`, `>=`) are numeric comparisons. If you use them on non-number values, XE raises a runtime error.
-
-Equality compares values of the same runtime kind naturally. Different runtime kinds are not treated as equal.
+`print` shows text as-is, but inside lists and maps text is quoted so that `1` and `"1"` look different:
 
 ```xe
-print(5 == 5)
-print("xe" == "xe")
-print(true == 1)
+print("a", ["a", 1], {"k": "v"}) # a ["a", 1] {"k": "v"}
 ```
-
-The last line evaluates to `false`, not to an implicit coercion.
 
 ## Next steps
 

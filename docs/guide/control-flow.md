@@ -19,7 +19,7 @@ else:
 
 Rules:
 
-- conditions use truthiness
+- conditions use truthiness: `false`, `none`, `0`, `""`, `[]` and `{}` are false, everything else is true
 - each branch is an indented block
 - `elif` chains are supported
 - `else` is optional
@@ -57,10 +57,22 @@ The condition is checked before each iteration.
 
 ## `for ... in ...`
 
-XE currently allows `for` loops over:
+XE allows `for` loops over:
 
 - lists
-- text values
+- text values, one character at a time
+- maps, which visit their keys in insertion order
+- `range(...)`, which counts numbers
+
+Count with `range`:
+
+```xe
+for i in range(5):
+    print(i) # 0 to 4
+
+for i in range(10, 0, -2):
+    print(i) # 10, 8, 6, 4, 2
+```
 
 Example over a list:
 
@@ -118,29 +130,46 @@ print(total)
 
 `continue` outside a loop is also a compiler error.
 
+## `pass`
+
+A block cannot be empty; write `pass` where there is nothing to do:
+
+```xe
+for item in [1, 2, 3]:
+    pass
+```
+
+## `try` and `catch`
+
+`try` runs a block, and if a runtime error happens inside it, runs the `catch` block instead of stopping the program. The name after `catch` (optional) receives the error message:
+
+```xe
+fun safe_divide(a, b):
+    try:
+        return a / b
+    catch err:
+        print("could not divide:", err)
+        return 0
+
+print(safe_divide(1, 0))
+```
+
+Raise your own errors with `error("message")`.
+
 ## Scope inside control-flow blocks
 
-XE does not automatically export names created inside `if` or loop blocks.
+Blocks do not create a new scope, as in Python. A name assigned inside an `if`, loop or `try` block is visible after it:
 
 ```xe
-if true:
-    inner = 42
-
-print(inner)
+score = 70
+if score >= 50:
+    result = "pass"
+else:
+    result = "fail"
+print(result)
 ```
 
-That fails because `inner` was created inside the block.
-
-But reassignment to an already existing outer variable works:
-
-```xe
-count = 0
-
-repeat 3 times:
-    count = count + 1
-
-print(count)
-```
+Inside a function, a variable must be assigned on every path before it is read; otherwise compiling fails with "might not be assigned yet". A `for` loop's own variable belongs to the loop.
 
 ## Short-circuit behavior
 

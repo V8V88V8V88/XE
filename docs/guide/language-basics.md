@@ -37,13 +37,11 @@ What happens:
 - `x + y` evaluates to `30`
 - `print` shows the result
 
-Arithmetic operators available now:
+Arithmetic operators:
 
-- `+`
-- `-`
-- `*`
-- `/`
-- `%`
+- `+`, `-`, `*`, `/`
+- `//` divides and rounds down, `%` is the remainder, `**` is power
+- `x += 1` is short for `x = x + 1` (also `-=`, `*=`, `/=`, `//=`, `%=`, `**=`)
 
 ## Text
 
@@ -100,20 +98,13 @@ else:
     print("Keep going")
 ```
 
-Comparison operators:
+Comparison operators: `==`, `!=`, `<`, `>`, `<=`, `>=` (numbers, or text alphabetically), and `in` / `not in` for membership.
 
-- `==`
-- `!=`
-- `<`
-- `>`
-- `<=`
-- `>=`
+Logical operators: `and`, `or`, `not`. As in Python, `not x == 5` means `not (x == 5)`.
 
-Logical operators:
+Conditions can be any value: `0`, `""`, `[]`, `{}`, `none` and `false` count as false.
 
-- `and`
-- `or`
-- `not`
+Variables assigned inside an `if` block are still available after it.
 
 ## Repeat loops
 
@@ -151,7 +142,12 @@ while count < 3:
 
 ## For loops
 
-Use `for name in iterable` to walk through a list or text value.
+Use `for name in iterable` to walk through a list, a text value, the keys of a map, or a `range` of numbers.
+
+```xe
+for i in range(3):
+    print(i) # 0, 1, 2
+```
 
 ```xe
 total = 0
@@ -199,30 +195,31 @@ fun add(a, b):
 print(add(3, 5))
 ```
 
-You can also define functions that do an action and return `0`:
+A function that does not return a value gives back `none`:
 
 ```xe
 fun greet(name):
     print("Hello " + name)
-    return 0
 
 greet("World")
 ```
 
+Functions are values too: pass them to other functions, or write small ones inline with `lambda x: x * 2`.
+
 ## Modules
 
-XE can import functions from other `.xe` files.
+XE can import from other `.xe` files.
 
 ```xe
 from math_utils import double
 print(double(21))
 ```
 
-You can also import every top-level function from a module:
+Or import the whole module and use its name:
 
 ```xe
 import helpers
-print(square(4))
+print(helpers.square(4))
 ```
 
 Imports resolve relative to the current file and must come before executable top-level statements.
@@ -252,27 +249,22 @@ print(length(fruits))
 
 Notes:
 
-- list indexing starts at `0`
-- `fruits[0]` is the first element
+- list indexing starts at `0`; `fruits[-1]` is the last element
+- `fruits[1:]` is a slice: a new list without the first element
+- `fruits.append("date")` adds to the end (same as `append(fruits, "date")`)
 - `length(fruits)` returns the number of elements
 
 ## Built-ins
 
-Current built-ins:
-
-- `print(...)`
-- `input(prompt)`
-- `length(value)`
-- `type(value)`
-- `convert(value, "target")`
+XE has built-in functions for text (`upper`, `split`, `replace`, ...), lists (`append`, `pop`, `sort`, ...), maps (`keys`, `values`, ...), math (`abs`, `round`, `sqrt`, `min`, `max`, ...), files (`read_file`, `write_file`, ...) and the program (`args`, `exit`, `error`). See the [Language Reference](/reference/language#built-in-functions) for the full list.
 
 ## Quick summary
 
-- Data types: number, text, boolean, list
-- Typing: dynamic at runtime, with semantic checks for names and control flow
-- Control flow: `if`, `elif`, `else`, `repeat N times`, `while`, `for ... in ...`
-- Loop control: `break`, `continue`
-- Functions: `fun name(args):` and `return`
+- Data types: number, text, boolean, none, list, map, struct, function
+- Typing: inferred; known numbers, text and booleans compile to native values
+- Control flow: `if`, `elif`, `else`, `repeat N times`, `while`, `for ... in ...`, `try` / `catch`
+- Loop control: `break`, `continue`, `pass`
+- Functions: `fun name(args):`, `return`, and `lambda`
 - Blocks: indentation with spaces, not braces
 
 For the more detailed version of each topic, continue with:

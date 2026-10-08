@@ -73,7 +73,7 @@ fun show():
 show()
 ```
 
-Functions read the current value of a global, including changes made by top-level loops and by other functions. Mutating a global list, map, or struct (with `append`, `pop`, `items[0] = ...`, `p.x = ...`) changes the global itself.
+Functions read the current value of a global, including changes made by top-level loops and by other functions. Lists, maps and structs are shared, so mutating one (with `append`, `items[0] = ...`, `p.x = ...`) changes it everywhere it is used, whether it is a global or was passed in as an argument.
 
 ```xe
 items = []
@@ -87,11 +87,32 @@ print(items) # [1]
 
 ## Local variables and `global`
 
-XE follows Python's rule: a name that is **assigned** anywhere inside a function is local to that function.
+XE follows Python's rule: a name that is **assigned** anywhere inside a function is local to that whole function.
 
-- first assignment creates it in the current local scope
-- later assignment reuses that same variable
+- the first assignment creates it, even inside an `if`, `while` or `try` block
+- later assignments reuse that same variable
 - a local may have the same name as a global; the global is left untouched
+
+```xe
+fun describe(n):
+    if n > 0:
+        label = "positive"
+    else:
+        label = "not positive"
+    return label
+```
+
+A local must be assigned on every path before it is read. This is checked when compiling:
+
+```xe
+fun first_even(items):
+    for item in items:
+        if item % 2 == 0:
+            found = item
+    return found # Error: variable 'found' might not be assigned yet
+```
+
+Give the variable a starting value (`found = none`) before the loop to fix it.
 
 ```xe
 fun counter():
@@ -135,20 +156,53 @@ fun fib(n):
     return fib(n - 1) + fib(n - 2)
 ```
 
-XE supports recursion naturally because function definitions are collected before semantic checks.
+Functions can be called before they are defined in the file.
 
-## No nested closures yet
+## Functions are values
 
-XE does not currently support **nested closures** (capturing a local variable from an outer function).
+A function can be stored in a variable, passed to another function, or returned:
 
 ```xe
-fun outer():
-    x = 10
-    fun inner():
-        print(x) # Error: inner() cannot see x from outer()
+fun double(x):
+    return x * 2
+
+fun apply(f, items):
+    out = []
+    for item in items:
+        out.append(f(item))
+    return out
+
+print(apply(double, [1, 2, 3])) # [2, 4, 6]
+print(apply(upper, ["a", "b"])) # built-in functions work too
 ```
 
-Imports do not change that rule. A function can call an imported XE function and read global variables, but it cannot capture local variables from another function's stack frame.
+## Lambdas
+
+`lambda params: expression` creates a small anonymous function:
+
+```xe
+print(apply(lambda x: x + 100, [1, 2])) # [101, 102]
+
+fun make_adder(n):
+    return lambda x: x + n
+
+add5 = make_adder(5)
+print(add5(10)) # 15
+```
+
+A lambda can use variables from around it. Their values are copied when the lambda is created, so later reassignments do not affect it (lists and maps are still shared).
+
+Functions and structs can only be defined at the top level of a module; use a lambda when you need a function inside another one.
+
+## Method-call syntax
+
+`value.name(args)` is another way to write `name(value, args)`:
+
+```xe
+items = [3, 1, 2]
+items.append(0)
+print(items.sort(), "hi".upper())
+```
 
 ## No contracts or constants yet
 

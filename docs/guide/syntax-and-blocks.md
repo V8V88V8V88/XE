@@ -60,6 +60,10 @@ These statements start a block:
 - `while condition:`
 - `for name in iterable:`
 - `fun name(args):`
+- `struct Name:`
+- `try:` / `catch name:`
+
+Use `pass` for a block that does nothing.
 
 ## Comments
 
@@ -89,11 +93,11 @@ print(items[1])
 
 ## Imports
 
-XE supports two import forms:
-
 ```xe
-import helpers
-from helpers import square
+import helpers                  # use helpers.square(3)
+import helpers as h             # use h.square(3)
+from helpers import square      # use square(3)
+from helpers import square as sq
 ```
 
 Imports are top-level statements. They must appear before executable top-level code in the file.
@@ -103,8 +107,8 @@ Imports are top-level statements. They must appear before executable top-level c
 These are not part of the language right now:
 
 - `const` declarations
-- list mutation like `items[0] = 42`
 - multi-line strings
+- list comprehensions
 
 ## Next steps
 
