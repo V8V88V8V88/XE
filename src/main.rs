@@ -197,7 +197,15 @@ fn ensure_rustc_available() -> PathBuf {
         return rustc;
     }
 
-    eprintln!("Rust compiler not found. Installing Rust toolchain with rustup...");
+    eprintln!("XE needs the Rust compiler (rustc) to build programs, but it was not found.");
+    let preapproved = env::var("XE_INSTALL_RUST").is_ok_and(|value| value == "1");
+    if !preapproved && !prompt_yes_no("Install the Rust toolchain now using rustup (https://rustup.rs)?") {
+        eprintln!("Install Rust from https://rustup.rs/ and run the command again.");
+        eprintln!("(Set XE_INSTALL_RUST=1 to let XE install it without asking.)");
+        std::process::exit(1);
+    }
+
+    eprintln!("Installing the Rust toolchain with rustup...");
     if let Err(message) = install_rust_toolchain() {
         eprintln!("Error: {}", message);
         eprintln!("Install Rust manually from https://rustup.rs/ and run the command again.");
@@ -539,33 +547,37 @@ fn install_binary(args: &[String]) {
         std::process::exit(1);
     }
 
+    let already_on_path = current_path_contains(&install_dir);
     prepend_to_current_path(&install_dir);
 
     eprintln!("Installed XE to {}", target.display());
+    if already_on_path {
+        eprintln!("'{}' is already available in PATH.", install_dir.display());
+        return;
+    }
+
+    let question = if cfg!(windows) {
+        format!("Add '{}' to your user PATH?", install_dir.display())
+    } else {
+        format!("Add '{}' to PATH in your shell profile?", install_dir.display())
+    };
+    if !prompt_yes_no(&question) {
+        eprintln!(
+            "Add '{}' to your PATH yourself to run 'xe' directly in new shells.",
+            install_dir.display()
+        );
+        return;
+    }
+
     match persist_path_entry(&install_dir) {
-        Ok(true) => {
-            if cfg!(windows) {
-                eprintln!(
-                    "Added '{}' to your user PATH. Open a new shell to use 'xe' directly.",
-                    install_dir.display()
-                );
-            } else {
-                eprintln!(
-                    "Added '{}' to your shell PATH configuration. Open a new shell to use 'xe' directly.",
-                    install_dir.display()
-                );
-            }
-        }
-        Ok(false) => {
-            if current_path_contains(&install_dir) {
-                eprintln!("'{}' is already available in PATH.", install_dir.display());
-            } else {
-                eprintln!(
-                    "'{}' is already configured for future shells. Open a new shell to use 'xe' directly.",
-                    install_dir.display()
-                );
-            }
-        }
+        Ok(true) => eprintln!(
+            "Added '{}' to your PATH. Open a new shell to use 'xe' directly.",
+            install_dir.display()
+        ),
+        Ok(false) => eprintln!(
+            "'{}' is already configured for future shells. Open a new shell to use 'xe' directly.",
+            install_dir.display()
+        ),
         Err(message) => {
             eprintln!("Warning: {}", message);
             eprintln!(

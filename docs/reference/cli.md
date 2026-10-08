@@ -23,12 +23,16 @@ xe help
 - Builds a temporary executable with `rustc`
 - Runs the program immediately
 
+## Rust toolchain
+
+`run` and `compile -o` need `rustc`. If it is missing, XE asks before installing it with rustup; in a non-interactive shell it prints instructions instead. Set `XE_INSTALL_RUST=1` to allow the installation without asking.
+
 ## `install`
 
 - Copies the current XE binary into a local bin directory
 - Default install target is `~/.local/bin`
 - `--to <directory>` lets you choose a custom install directory
-- After installation, that directory must be in your shell `PATH` to run `xe` directly
+- If the directory is not on your `PATH`, XE asks before adding it to your shell profile (or your user `PATH` on Windows); in a non-interactive shell it only prints instructions
 
 ## `help`
 
