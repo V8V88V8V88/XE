@@ -93,7 +93,7 @@ pub struct XeError {
 
 impl XeError {
     pub fn new(kind: XeErrorKind, span: Option<Span>) -> Self {
-        let message = Self::format_message(&kind);
+        let message = demangle(&Self::format_message(&kind));
         Self {
             kind,
             span,
@@ -214,3 +214,26 @@ impl fmt::Display for XeError {
 impl std::error::Error for XeError {}
 
 pub type XeResult<T> = Result<T, XeError>;
+
+/// Removes the module prefix the linker adds to names (`xe_m0_add` -> `add`).
+pub fn demangle(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(position) = rest.find("xe_m") {
+        output.push_str(&rest[..position]);
+        let after = &rest[position + 4..];
+        let digits = after.len() - after.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+        let at_word_start = !output
+            .chars()
+            .last()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_');
+        if digits > 0 && after[digits..].starts_with('_') && at_word_start {
+            rest = &after[digits + 1..];
+        } else {
+            output.push_str("xe_m");
+            rest = after;
+        }
+    }
+    output.push_str(rest);
+    output
+}

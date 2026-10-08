@@ -35,8 +35,6 @@ enum ResolvedImportKind {
 struct ModuleRecord {
     id: usize,
     path: PathBuf,
-    source_name: String,
-    source: String,
     program: Program,
     exports: HashMap<String, String>,
     export_order: Vec<String>,
@@ -128,6 +126,9 @@ impl ModuleCompiler {
             )
         })?;
 
+        // Recorded before parsing so syntax errors can show the offending line.
+        self.sources.insert(source_name.clone(), source.clone());
+
         self.loading_stack.push(canonical.clone());
 
         let result = (|| -> Result<ModuleRecord, XeError> {
@@ -146,8 +147,6 @@ impl ModuleCompiler {
             Ok(ModuleRecord {
                 id: module_id,
                 path: path.to_path_buf(),
-                source_name: source_name.clone(),
-                source: source.clone(),
                 program,
                 exports,
                 export_order,
@@ -158,8 +157,6 @@ impl ModuleCompiler {
         self.loading_stack.pop();
 
         let module = result?;
-        self.sources
-            .insert(module.source_name.clone(), module.source.clone());
         self.module_ids_by_path
             .insert(module.path.clone(), module.id);
         self.modules.insert(module.id, module);
