@@ -44,6 +44,7 @@ fn clean_temp_dir(path: &std::path::Path) {
     let _ = fs::remove_dir_all(path);
 }
 
+#[cfg(unix)]
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
