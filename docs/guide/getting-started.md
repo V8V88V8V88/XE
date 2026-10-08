@@ -88,7 +88,7 @@ curl -fsSL https://xe-lang.vercel.app/install.sh | bash
 > XE_INSTALL_DIR="$HOME/bin" curl -fsSL https://xe-lang.vercel.app/install.sh | bash
 >
 > # Install a specific release version
-> XE_VERSION="v0.1.4" curl -fsSL https://xe-lang.vercel.app/install.sh | bash
+> XE_VERSION="v0.1.5" curl -fsSL https://xe-lang.vercel.app/install.sh | bash
 > ```
 
 ---
@@ -156,7 +156,7 @@ xe --version
 ```
 Expected output:
 ```text
-xe version 0.1.4
+xe version 0.1.5
 ```
 
 > **PATH Troubleshooting:** If `xe` is not recognized after installation:
