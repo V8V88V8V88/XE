@@ -4,9 +4,155 @@ use crate::ast::*;
 use crate::builtins::Builtin;
 use crate::error::{Span, XeError, XeErrorKind, XeResult};
 
-/// Analyzes a linked program and produces the typed program.
+/// Analyzes a linked program, then tries to give function parameters and return
+/// values native types (see [`optimize`]). The result is always equivalent to the
+/// conservative analysis; typing is only made more precise when that is provably safe.
 pub fn analyze_program(program: &Program) -> XeResult<TypedProgram> {
-    SemanticAnalyzer::new().analyze(program)
+    let mut analyzer = SemanticAnalyzer::new(Seeds::default());
+    let base = analyzer.analyze(program)?;
+    Ok(optimize(program, base, analyzer.report))
+}
+
+/// Type guesses for function parameters and return values.
+#[derive(Clone, Default, PartialEq)]
+struct Seeds {
+    params: HashMap<String, Vec<XeType>>,
+    returns: HashMap<String, XeType>,
+}
+
+/// Facts recorded during one analysis, used to compute and verify seeds.
+#[derive(Clone, Default)]
+struct Report {
+    /// Argument types at each direct call of a user function.
+    call_sites: HashMap<String, Vec<Vec<XeType>>>,
+    /// Functions used as values; their parameters must stay dynamic.
+    function_values: HashSet<String>,
+    returns: HashMap<String, XeType>,
+    /// The return type a function would have if its dynamic return values were native.
+    optimistic_returns: HashMap<String, XeType>,
+    /// Declared type of every variable ("function::name", "::name" for globals).
+    var_types: HashMap<String, XeType>,
+    /// Variables that received a runtime-checked conversion from a dynamic value.
+    checked_vars: HashSet<String>,
+}
+
+/// Repeatedly re-analyzes the program with native parameter and return types inferred
+/// from the previous round. A round is accepted only if every guess is confirmed:
+/// call sites pass exactly the seeded types, functions return exactly the seeded types,
+/// and no variable became native while also receiving runtime-checked dynamic values.
+/// Otherwise the conservative analysis is used, so behavior never changes.
+fn optimize(program: &Program, base: TypedProgram, base_report: Report) -> TypedProgram {
+    let mut demoted_params: HashSet<(String, usize)> = HashSet::new();
+    let mut failed_returns: HashSet<String> = HashSet::new();
+    let mut report = base_report.clone();
+    let mut best = base;
+    let mut tried: Vec<Seeds> = Vec::new();
+
+    // Each round may reveal more (e.g. native parameters make a recursive function's
+    // return type native), so keep refining while the guesses change.
+    for _ in 0..8 {
+        let seeds = seeds_from(&report, &demoted_params, &failed_returns);
+        if (seeds.params.is_empty() && seeds.returns.is_empty()) || tried.contains(&seeds) {
+            break;
+        }
+        tried.push(seeds.clone());
+
+        let mut analyzer = SemanticAnalyzer::new(seeds.clone());
+        let Ok(typed) = analyzer.analyze(program) else {
+            break;
+        };
+        let round = analyzer.report;
+
+        let mut consistent = true;
+        for (function, seeded) in &seeds.returns {
+            if round.returns.get(function) != Some(seeded) {
+                failed_returns.insert(function.clone());
+                consistent = false;
+            }
+        }
+        for (function, params) in &seeds.params {
+            for (i, seeded) in params.iter().enumerate() {
+                if *seeded == XeType::Unknown {
+                    continue;
+                }
+                let mismatch = round
+                    .call_sites
+                    .get(function)
+                    .is_some_and(|sites| sites.iter().any(|site| site.get(i) != Some(seeded)));
+                if mismatch {
+                    demoted_params.insert((function.clone(), i));
+                    consistent = false;
+                }
+            }
+        }
+        for var in &round.checked_vars {
+            if round.var_types.get(var) != base_report.var_types.get(var) {
+                let function = var.split("::").next().unwrap_or_default();
+                if function.is_empty() {
+                    return best;
+                }
+                // Back off every guess about the function this variable lives in.
+                if let Some(params) = seeds.params.get(function) {
+                    for i in 0..params.len() {
+                        demoted_params.insert((function.to_string(), i));
+                    }
+                }
+                failed_returns.insert(function.to_string());
+                consistent = false;
+            }
+        }
+
+        if consistent {
+            best = typed;
+        }
+        report = round;
+    }
+
+    best
+}
+
+fn seeds_from(
+    report: &Report,
+    demoted_params: &HashSet<(String, usize)>,
+    failed_returns: &HashSet<String>,
+) -> Seeds {
+    let mut seeds = Seeds::default();
+
+    for (function, sites) in &report.call_sites {
+        if report.function_values.contains(function) {
+            continue;
+        }
+        let Some(first) = sites.first() else {
+            continue;
+        };
+        let params: Vec<XeType> = (0..first.len())
+            .map(|i| {
+                let ty = &first[i];
+                let agreed = sites.iter().all(|site| site.get(i) == Some(ty));
+                if agreed && ty.is_scalar() && !demoted_params.contains(&(function.clone(), i)) {
+                    ty.clone()
+                } else {
+                    XeType::Unknown
+                }
+            })
+            .collect();
+        if params.iter().any(|ty| *ty != XeType::Unknown) {
+            seeds.params.insert(function.clone(), params);
+        }
+    }
+
+    for (function, inferred) in &report.returns {
+        if failed_returns.contains(function) {
+            continue;
+        }
+        if inferred.is_scalar() {
+            seeds.returns.insert(function.clone(), inferred.clone());
+        } else if let Some(optimistic) = report.optimistic_returns.get(function) {
+            seeds.returns.insert(function.clone(), optimistic.clone());
+        }
+    }
+
+    seeds
 }
 
 #[derive(Clone)]
@@ -21,6 +167,7 @@ struct SymbolInfo {
 struct FunctionInfo {
     params: Vec<XeType>,
     return_type: XeType,
+    is_struct: bool,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -46,6 +193,7 @@ struct ReturnInfo {
 }
 
 struct FunctionState {
+    name: String,
     returns: ReturnInfo,
     locals: Vec<(String, XeType)>,
     /// Locals definitely assigned at the current point; `None` when unreachable.
@@ -71,10 +219,12 @@ pub struct SemanticAnalyzer {
     loop_depth: usize,
     function: Option<FunctionState>,
     lambdas: Vec<LambdaFrame>,
+    seeds: Seeds,
+    report: Report,
 }
 
 impl SemanticAnalyzer {
-    fn new() -> Self {
+    fn new(seeds: Seeds) -> Self {
         Self {
             globals: HashMap::new(),
             global_order: Vec::new(),
@@ -84,6 +234,8 @@ impl SemanticAnalyzer {
             loop_depth: 0,
             function: None,
             lambdas: Vec::new(),
+            seeds,
+            report: Report::default(),
         }
     }
 
@@ -93,9 +245,22 @@ impl SemanticAnalyzer {
             match &stmt.kind {
                 StatementKind::FunctionDef { name, params, body } => {
                     self.check_new_definition(name, &stmt.span)?;
+                    let param_types = self
+                        .seeds
+                        .params
+                        .get(name)
+                        .cloned()
+                        .unwrap_or_else(|| vec![XeType::Unknown; params.len()]);
+                    let return_type = self
+                        .seeds
+                        .returns
+                        .get(name)
+                        .cloned()
+                        .unwrap_or(XeType::Unknown);
                     self.functions.insert(name.clone(), FunctionInfo {
-                        params: vec![XeType::Unknown; params.len()],
-                        return_type: XeType::Unknown,
+                        params: param_types,
+                        return_type,
+                        is_struct: false,
                     });
 
                     let mut declared_globals = Vec::new();
@@ -111,6 +276,7 @@ impl SemanticAnalyzer {
                     self.functions.insert(name.clone(), FunctionInfo {
                         params: vec![XeType::Unknown; fields.len()],
                         return_type: XeType::Struct(name.clone()),
+                        is_struct: true,
                     });
                 }
                 _ => {
@@ -247,6 +413,7 @@ impl SemanticAnalyzer {
                         ));
                     }
                 };
+                self.record_var_type(variable, &variable_type);
                 let body = self.analyze_loop_body(
                     body,
                     Some((variable.clone(), variable_type.clone(), stmt.span.clone())),
@@ -444,6 +611,9 @@ impl SemanticAnalyzer {
                 defined_at: span.clone(),
                 declared: true,
             });
+            self.report
+                .var_types
+                .insert(format!("{}::{}", name, param), ty.clone());
         }
 
         let saved_scopes = std::mem::replace(
@@ -456,6 +626,7 @@ impl SemanticAnalyzer {
         let saved_loop_depth = std::mem::replace(&mut self.loop_depth, 0);
         let saved_lambdas = std::mem::take(&mut self.lambdas);
         let saved_function = self.function.replace(FunctionState {
+            name: name.to_string(),
             returns: ReturnInfo::default(),
             locals: Vec::new(),
             assigned: Some(params.iter().cloned().collect()),
@@ -472,6 +643,12 @@ impl SemanticAnalyzer {
 
         let always_returns = block_always_returns(body);
         let return_type = infer_return_type(&state.returns, always_returns);
+        if let Some(optimistic) = optimistic_return_type(&state.returns, always_returns) {
+            self.report
+                .optimistic_returns
+                .insert(name.to_string(), optimistic);
+        }
+        self.report.returns.insert(name.to_string(), return_type.clone());
         if let Some(info) = self.functions.get_mut(name) {
             info.return_type = return_type.clone();
         }
@@ -534,6 +711,18 @@ impl SemanticAnalyzer {
 
     // --- Variables ---
 
+    fn var_key(&self, name: &str) -> String {
+        match &self.function {
+            Some(function) => format!("{}::{}", function.name, name),
+            None => format!("::{}", name),
+        }
+    }
+
+    fn record_var_type(&mut self, name: &str, ty: &XeType) {
+        let key = self.var_key(name);
+        self.report.var_types.insert(key, ty.clone());
+    }
+
     fn find_variable(&self, name: &str) -> Option<(VarLocation, SymbolInfo)> {
         for (index, scope) in self.scopes.iter().enumerate().rev() {
             if let Some(info) = scope.vars.get(name) {
@@ -587,6 +776,7 @@ impl SemanticAnalyzer {
 
         match self.find_variable(name) {
             Some((location, info)) if info.declared => {
+                let checked = value.ty.is_dynamic() && info.ty.is_scalar();
                 let coerced = self.coerce(value, &info.ty).map_err(|got| {
                     XeError::new(
                         XeErrorKind::TypeMismatch {
@@ -596,6 +786,13 @@ impl SemanticAnalyzer {
                         Some(span.clone()),
                     )
                 })?;
+                if checked {
+                    let key = match location {
+                        VarLocation::Global => format!("::{}", name),
+                        VarLocation::Local(_) => self.var_key(name),
+                    };
+                    self.report.checked_vars.insert(key);
+                }
                 if let VarLocation::Local(index) = location {
                     if self.scopes[index].kind == ScopeKind::FunctionLocals {
                         self.mark_assigned(name);
@@ -609,6 +806,9 @@ impl SemanticAnalyzer {
                 global.ty = value.ty.clone();
                 global.declared = true;
                 global.defined_at = span.clone();
+                self.report
+                    .var_types
+                    .insert(format!("::{}", name), value.ty.clone());
                 Ok(value)
             }
             Some((VarLocation::Local(_), _)) => unreachable!("locals are always declared"),
@@ -618,6 +818,7 @@ impl SemanticAnalyzer {
                     defined_at: span.clone(),
                     declared: true,
                 };
+                self.record_var_type(name, &value.ty);
                 match &mut self.function {
                     Some(function) => {
                         function.locals.push((name.to_string(), value.ty.clone()));
@@ -659,6 +860,7 @@ impl SemanticAnalyzer {
                 if let Some(ty) = self.read_variable(name, &span)? {
                     (TypedExpressionKind::Identifier(name.clone()), ty)
                 } else if self.functions.contains_key(name) {
+                    self.report.function_values.insert(name.clone());
                     (TypedExpressionKind::FunctionRef(name.clone()), XeType::Function)
                 } else if let Some(builtin) = Builtin::from_name(name) {
                     (TypedExpressionKind::BuiltinRef(builtin), XeType::Function)
@@ -997,6 +1199,7 @@ impl SemanticAnalyzer {
         if let Some(info) = self.functions.get(name) {
             let param_types = info.params.clone();
             let return_type = info.return_type.clone();
+            let is_struct = info.is_struct;
             if all_args.len() != param_types.len() {
                 return Err(XeError::new(
                     XeErrorKind::WrongArgumentCount {
@@ -1007,13 +1210,22 @@ impl SemanticAnalyzer {
                     Some(span.clone()),
                 ));
             }
+            let mut site_types = Vec::new();
             let mut typed_args = Vec::new();
             for (arg, param_ty) in all_args.iter().zip(&param_types) {
                 let typed = self.analyze_expression(arg)?;
+                site_types.push(typed.ty.clone());
                 let typed = self
                     .coerce(typed, param_ty)
                     .map_err(|got| type_mismatch(&param_ty.name(), got, &arg.span))?;
                 typed_args.push(typed);
+            }
+            if !is_struct {
+                self.report
+                    .call_sites
+                    .entry(name.to_string())
+                    .or_default()
+                    .push(site_types);
             }
             return Ok((
                 TypedExpressionKind::FunctionCall {
@@ -1190,6 +1402,17 @@ fn infer_return_type(info: &ReturnInfo, always_returns: bool) -> XeType {
     } else {
         first.clone()
     }
+}
+
+/// The native type a function would return if its dynamic return values (typically
+/// recursive calls) turn out to have the same type as its native ones.
+fn optimistic_return_type(info: &ReturnInfo, always_returns: bool) -> Option<XeType> {
+    if info.has_bare_return || !always_returns {
+        return None;
+    }
+    let mut native = info.value_types.iter().filter(|ty| **ty != XeType::Unknown);
+    let first = native.next()?;
+    (first.is_scalar() && native.all(|ty| ty == first)).then(|| first.clone())
 }
 
 fn check_unique_names(names: &[String], span: &Span) -> XeResult<()> {

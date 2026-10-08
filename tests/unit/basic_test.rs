@@ -1904,3 +1904,18 @@ fn test_program_arguments_and_exit_code() {
     assert_eq!(String::from_utf8_lossy(&output.stdout), "[\"hello\", \"7\"]\n");
     assert_eq!(output.status.code(), Some(7));
 }
+
+#[test]
+fn test_recursive_functions_get_native_types() {
+    let rust_code = compile_xe(
+        r#"
+fun fib(n):
+    if n <= 1:
+        return n
+    return fib(n - 1) + fib(n - 2)
+print(fib(20))
+"#,
+    )
+    .unwrap();
+    assert!(rust_code.contains("fn xe_m0_fib(mut l_n: f64) -> f64"), "{}", rust_code);
+}

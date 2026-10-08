@@ -32,6 +32,11 @@ impl XeType {
         )
     }
 
+    /// Number, text and boolean have native (unboxed) Rust representations.
+    pub fn is_scalar(&self) -> bool {
+        matches!(self, XeType::Number | XeType::Text | XeType::Boolean)
+    }
+
     pub fn name(&self) -> String {
         self.to_string()
     }
