@@ -78,6 +78,11 @@ pub enum XeErrorKind {
     LocalUsedBeforeAssignment(String),
     DuplicateParameter(String),
     InvalidAssignmentTarget(String),
+    ModuleUsedAsValue(String),
+    NotCallable(String),
+    MaybeUnassigned(String),
+    NestedDefinition,
+    InvalidOperation(String),
 
     // General
     IoError(String),
@@ -159,7 +164,7 @@ impl XeError {
             }
             XeErrorKind::ImportNameConflict(name) => {
                 format!(
-                    "imported name '{}' conflicts with an existing function",
+                    "imported name '{}' conflicts with an existing name in this module",
                     name
                 )
             }
@@ -175,6 +180,19 @@ impl XeError {
                 format!("duplicate parameter or field name '{}'", name)
             }
             XeErrorKind::InvalidAssignmentTarget(msg) => msg.clone(),
+            XeErrorKind::ModuleUsedAsValue(name) => format!(
+                "module '{}' cannot be used as a value; access its members like '{}.name'",
+                name, name
+            ),
+            XeErrorKind::NotCallable(what) => format!("{} is not a function", what),
+            XeErrorKind::MaybeUnassigned(name) => format!(
+                "variable '{}' might not be assigned yet; assign it on every path before using it",
+                name
+            ),
+            XeErrorKind::NestedDefinition => {
+                "functions and structs can only be defined at the top level of a module; use 'lambda' for inline functions".to_string()
+            }
+            XeErrorKind::InvalidOperation(msg) => msg.clone(),
             XeErrorKind::IoError(msg) => format!("I/O error: {}", msg),
         }
     }
@@ -213,8 +231,6 @@ impl fmt::Display for XeError {
 
 impl std::error::Error for XeError {}
 
-pub type XeResult<T> = Result<T, XeError>;
-
 /// Removes the module prefix the linker adds to names (`xe_m0_add` -> `add`).
 pub fn demangle(text: &str) -> String {
     let mut output = String::with_capacity(text.len());
@@ -237,3 +253,5 @@ pub fn demangle(text: &str) -> String {
     output.push_str(rest);
     output
 }
+
+pub type XeResult<T> = Result<T, XeError>;

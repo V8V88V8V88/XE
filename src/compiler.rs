@@ -7,12 +7,6 @@ use crate::codegen::CodeGenerator;
 use crate::error::{Span, XeError, XeErrorKind};
 use crate::lexer::Lexer;
 use crate::parser::Parser;
-use crate::semantic::SemanticAnalyzer;
-
-const BUILTIN_FUNCTIONS: &[&str] = &[
-    "print", "input", "length", "type", "convert",
-    "append", "pop", "keys", "values", "has_key", "contains", "split", "join"
-];
 
 pub struct CompilationFailure {
     pub error: XeError,
@@ -28,17 +22,27 @@ struct ResolvedImport {
 
 #[derive(Clone)]
 enum ResolvedImportKind {
-    All,
-    Names(Vec<String>),
+    /// `import a.b` (binding "a.b") or `import a.b as c` (binding "c").
+    Module(String),
+    /// `from m import x as y`: (imported name, local name)
+    Names(Vec<(String, String)>),
 }
 
 struct ModuleRecord {
     id: usize,
     path: PathBuf,
     program: Program,
+    /// Every module-level name (functions, structs and variables) and its linked symbol.
     exports: HashMap<String, String>,
-    export_order: Vec<String>,
     imports: Vec<ResolvedImport>,
+}
+
+/// The names visible in a module through its imports.
+struct ImportScope {
+    /// `from m import x as y`: local name -> linked symbol
+    names: HashMap<String, String>,
+    /// `import m` bindings: binding path ("m", "a.b" or an alias) -> module id
+    modules: HashMap<String, usize>,
 }
 
 pub fn compile_path(entry_path: &Path) -> Result<String, Box<CompilationFailure>> {
@@ -51,12 +55,10 @@ pub fn compile_path(entry_path: &Path) -> Result<String, Box<CompilationFailure>
         .link_program(entry_id)
         .map_err(|error| Box::new(compiler.failure_for_error(error)))?;
 
-    let mut analyzer = SemanticAnalyzer::new();
-    let typed_program = analyzer
-        .analyze(&linked_program)
+    let typed_program = crate::semantic::analyze_program(&linked_program)
         .map_err(|error| Box::new(compiler.failure_for_error(error)))?;
 
-    let mut codegen = CodeGenerator::new();
+    let mut codegen = CodeGenerator::new(compiler.sources.clone());
     Ok(codegen.generate(&typed_program))
 }
 
@@ -68,6 +70,12 @@ struct ModuleCompiler {
     sources: HashMap<String, String>,
     /// Linked symbols of every module-level variable (as opposed to functions and structs).
     variable_symbols: HashSet<String>,
+}
+
+/// Everything name resolution needs while rewriting one module.
+struct Resolver<'a> {
+    module: &'a ModuleRecord,
+    imports: &'a ImportScope,
 }
 
 impl ModuleCompiler {
@@ -125,7 +133,6 @@ impl ModuleCompiler {
                 None,
             )
         })?;
-
         // Recorded before parsing so syntax errors can show the offending line.
         self.sources.insert(source_name.clone(), source.clone());
 
@@ -133,15 +140,16 @@ impl ModuleCompiler {
 
         let result = (|| -> Result<ModuleRecord, XeError> {
             let program = self.parse_program(&source, &source_name)?;
-            self.validate_import_placement(&program)?;
-            self.validate_no_nested_imports(&program)?;
+            validate_import_placement(&program)?;
+            for statement in &program.statements {
+                validate_nesting(statement, true)?;
+            }
 
             let module_id = self.allocate_module_id();
-            let (exports, variables) = self.collect_exports(module_id, &program)?;
+            let (exports, variables) = collect_exports(module_id, &program)?;
             for variable in &variables {
                 self.variable_symbols.insert(exports[variable].clone());
             }
-            let export_order = self.collect_export_order(&program);
             let imports = self.resolve_imports(&canonical, &program)?;
 
             Ok(ModuleRecord {
@@ -149,7 +157,6 @@ impl ModuleCompiler {
                 path: path.to_path_buf(),
                 program,
                 exports,
-                export_order,
                 imports,
             })
         })();
@@ -157,8 +164,7 @@ impl ModuleCompiler {
         self.loading_stack.pop();
 
         let module = result?;
-        self.module_ids_by_path
-            .insert(module.path.clone(), module.id);
+        self.module_ids_by_path.insert(module.path.clone(), module.id);
         self.modules.insert(module.id, module);
 
         Ok(*self.module_ids_by_path.get(&canonical).unwrap())
@@ -172,183 +178,6 @@ impl ModuleCompiler {
         parser.parse()
     }
 
-    fn validate_import_placement(&self, program: &Program) -> Result<(), XeError> {
-        let mut seen_executable_statement = false;
-
-        for statement in &program.statements {
-            match &statement.kind {
-                StatementKind::Import { .. } | StatementKind::FromImport { .. } => {
-                    if seen_executable_statement {
-                        return Err(XeError::new(
-                            XeErrorKind::ImportAfterExecutableStatement,
-                            Some(statement.span.clone()),
-                        ));
-                    }
-                }
-                StatementKind::FunctionDef { .. } => {}
-                _ => {
-                    seen_executable_statement = true;
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    fn validate_no_nested_imports(&self, program: &Program) -> Result<(), XeError> {
-        for statement in &program.statements {
-            self.validate_statement_is_not_nested_import(statement, true)?;
-        }
-
-        Ok(())
-    }
-
-    fn validate_statement_is_not_nested_import(
-        &self,
-        statement: &Statement,
-        is_top_level: bool,
-    ) -> Result<(), XeError> {
-        match &statement.kind {
-            StatementKind::Import { .. } | StatementKind::FromImport { .. } if !is_top_level => {
-                return Err(XeError::new(
-                    XeErrorKind::ImportNotTopLevel,
-                    Some(statement.span.clone()),
-                ));
-            }
-            StatementKind::If {
-                then_block,
-                else_block,
-                ..
-            } => {
-                for nested in then_block {
-                    self.validate_statement_is_not_nested_import(nested, false)?;
-                }
-                if let Some(else_block) = else_block {
-                    for nested in else_block {
-                        self.validate_statement_is_not_nested_import(nested, false)?;
-                    }
-                }
-            }
-            StatementKind::While { body, .. }
-            | StatementKind::Repeat { body, .. }
-            | StatementKind::For { body, .. }
-            | StatementKind::FunctionDef { body, .. } => {
-                for nested in body {
-                    self.validate_statement_is_not_nested_import(nested, false)?;
-                }
-            }
-            _ => {}
-        }
-
-        Ok(())
-    }
-
-    fn collect_exports(
-        &self,
-        module_id: usize,
-        program: &Program,
-    ) -> Result<(HashMap<String, String>, HashSet<String>), XeError> {
-        let mut exports = HashMap::new();
-        let mut variables = HashSet::new();
-
-        for statement in &program.statements {
-            match &statement.kind {
-                StatementKind::FunctionDef { name, .. } => {
-                    if BUILTIN_FUNCTIONS.contains(&name.as_str()) {
-                        return Err(XeError::new(
-                            XeErrorKind::CannotRedefineBuiltin(name.clone()),
-                            Some(statement.span.clone()),
-                        ));
-                    }
-
-                    if exports.contains_key(name) {
-                        return Err(XeError::new(
-                            XeErrorKind::DuplicateFunction(name.clone()),
-                            Some(statement.span.clone()),
-                        ));
-                    }
-
-                    exports.insert(
-                        name.clone(),
-                        format!("xe_m{}_{}", module_id, sanitize_symbol(name)),
-                    );
-                }
-                StatementKind::StructDef { name, .. } => {
-                    if BUILTIN_FUNCTIONS.contains(&name.as_str()) {
-                        return Err(XeError::new(
-                            XeErrorKind::CannotRedefineBuiltin(name.clone()),
-                            Some(statement.span.clone()),
-                        ));
-                    }
-
-                    if exports.contains_key(name) {
-                        return Err(XeError::new(
-                            XeErrorKind::DuplicateFunction(name.clone()),
-                            Some(statement.span.clone()),
-                        ));
-                    }
-
-                    exports.insert(
-                        name.clone(),
-                        format!("xe_m{}_{}", module_id, sanitize_symbol(name)),
-                    );
-                }
-                StatementKind::Assignment { name, .. }
-                    if !exports.contains_key(name)
-                        && !BUILTIN_FUNCTIONS.contains(&name.as_str()) =>
-                {
-                    exports.insert(
-                        name.clone(),
-                        format!("xe_m{}_{}", module_id, sanitize_symbol(name)),
-                    );
-                    variables.insert(name.clone());
-                }
-                _ => {}
-            }
-        }
-
-        // Names declared `global` inside functions are module-level variables too.
-        for statement in &program.statements {
-            if let StatementKind::FunctionDef { body, .. } = &statement.kind {
-                for (name, span) in collect_global_declarations(body) {
-                    if variables.contains(&name) {
-                        continue;
-                    }
-                    if exports.contains_key(&name) || BUILTIN_FUNCTIONS.contains(&name.as_str()) {
-                        return Err(XeError::new(
-                            XeErrorKind::InvalidGlobal(format!(
-                                "'{}' is a function or struct and cannot be declared as a global variable",
-                                name
-                            )),
-                            Some(span),
-                        ));
-                    }
-                    exports.insert(
-                        name.clone(),
-                        format!("xe_m{}_{}", module_id, sanitize_symbol(&name)),
-                    );
-                    variables.insert(name);
-                }
-            }
-        }
-
-        Ok((exports, variables))
-    }
-
-    fn collect_export_order(&self, program: &Program) -> Vec<String> {
-        let mut export_order = Vec::new();
-
-        for statement in &program.statements {
-            if let StatementKind::FunctionDef { name, .. } = &statement.kind {
-                export_order.push(name.clone());
-            } else if let StatementKind::StructDef { name, .. } = &statement.kind {
-                export_order.push(name.clone());
-            }
-        }
-
-        export_order
-    }
-
     fn resolve_imports(
         &mut self,
         module_path: &Path,
@@ -358,31 +187,23 @@ impl ModuleCompiler {
         let mut imports = Vec::new();
 
         for statement in &program.statements {
-            match &statement.kind {
-                StatementKind::Import { module } => {
-                    let dependency_path =
-                        self.resolve_module_path(module_dir, module, &statement.span)?;
-                    let dependency_id =
-                        self.load_module(&dependency_path, Some(&statement.span))?;
-                    imports.push(ResolvedImport {
-                        module_id: dependency_id,
-                        kind: ResolvedImportKind::All,
-                        span: statement.span.clone(),
-                    });
-                }
+            let (module, kind) = match &statement.kind {
+                StatementKind::Import { module, alias } => (
+                    module,
+                    ResolvedImportKind::Module(alias.clone().unwrap_or_else(|| module.as_string())),
+                ),
                 StatementKind::FromImport { module, names } => {
-                    let dependency_path =
-                        self.resolve_module_path(module_dir, module, &statement.span)?;
-                    let dependency_id =
-                        self.load_module(&dependency_path, Some(&statement.span))?;
-                    imports.push(ResolvedImport {
-                        module_id: dependency_id,
-                        kind: ResolvedImportKind::Names(names.clone()),
-                        span: statement.span.clone(),
-                    });
+                    (module, ResolvedImportKind::Names(names.clone()))
                 }
-                _ => {}
-            }
+                _ => continue,
+            };
+            let dependency_path = self.resolve_module_path(module_dir, module, &statement.span)?;
+            let dependency_id = self.load_module(&dependency_path, Some(&statement.span))?;
+            imports.push(ResolvedImport {
+                module_id: dependency_id,
+                kind,
+                span: statement.span.clone(),
+            });
         }
 
         Ok(imports)
@@ -420,157 +241,151 @@ impl ModuleCompiler {
         let mut module_ids = self.modules.keys().copied().collect::<Vec<_>>();
         module_ids.sort_unstable();
 
-        // 1. Collect all function definitions from all modules
+        // 1. Collect all function and struct definitions from all modules
         for module_id in &module_ids {
-            let module = self.modules.get(module_id).unwrap();
-            let imported_functions = self.build_imported_function_map(module)?;
+            let module = &self.modules[module_id];
+            let imports = self.build_import_scope(module)?;
+            let resolver = Resolver {
+                module,
+                imports: &imports,
+            };
 
             for statement in &module.program.statements {
-                if let StatementKind::FunctionDef { .. } = &statement.kind {
-                    statements.push(Statement {
-                        kind: self.rewrite_function_def(statement, module, &imported_functions)?,
-                        span: statement.span.clone(),
-                    });
-                } else if let StatementKind::StructDef { name, fields } = &statement.kind {
-                    statements.push(Statement {
-                        kind: StatementKind::StructDef {
-                            name: module.exports.get(name).unwrap().clone(),
-                            fields: fields.clone(),
-                        },
-                        span: statement.span.clone(),
-                    });
-                }
+                let kind = match &statement.kind {
+                    StatementKind::FunctionDef { .. } => self.rewrite_function_def(statement, &resolver)?,
+                    StatementKind::StructDef { name, fields } => StatementKind::StructDef {
+                        name: module.exports[name].clone(),
+                        fields: fields.clone(),
+                    },
+                    _ => continue,
+                };
+                statements.push(Statement {
+                    kind,
+                    span: statement.span.clone(),
+                });
             }
         }
 
-        // 2. Collect and flatten all top-level executable statements in dependency order
-        for module_id in self.initialization_order(entry_id) {
-            let module = self.modules.get(&module_id).unwrap();
-            let imported_functions = self.build_imported_function_map(module)?;
-            let body = self.link_top_level_executable_statements(module, &imported_functions)?;
-            statements.extend(body);
+        // 2. Top-level code of every module in dependency order, the entry module last
+        let mut order = self.initialization_order(entry_id);
+        order.push(entry_id);
+        for module_id in order {
+            let module = &self.modules[&module_id];
+            let imports = self.build_import_scope(module)?;
+            let resolver = Resolver {
+                module,
+                imports: &imports,
+            };
+            let mut scopes = vec![HashSet::new()];
+            for statement in &module.program.statements {
+                if matches!(
+                    statement.kind,
+                    StatementKind::Import { .. }
+                        | StatementKind::FromImport { .. }
+                        | StatementKind::FunctionDef { .. }
+                        | StatementKind::StructDef { .. }
+                ) {
+                    continue;
+                }
+                statements.push(self.rewrite_statement(statement, &resolver, &mut scopes, None)?);
+            }
         }
-
-        // 3. Finally, add the entry module's own top-level code
-        let entry_module = self.modules.get(&entry_id).unwrap();
-        let imported_functions = self.build_imported_function_map(entry_module)?;
-        statements
-            .extend(self.link_top_level_executable_statements(entry_module, &imported_functions)?);
 
         Ok(Program { statements })
     }
 
-    fn build_imported_function_map(
-        &self,
-        module: &ModuleRecord,
-    ) -> Result<HashMap<String, String>, XeError> {
-        let mut imported_functions = HashMap::new();
+    fn build_import_scope(&self, module: &ModuleRecord) -> Result<ImportScope, XeError> {
+        let mut scope = ImportScope {
+            names: HashMap::new(),
+            modules: HashMap::new(),
+        };
 
         for import in &module.imports {
-            let dependency = self.modules.get(&import.module_id).unwrap();
+            let dependency = &self.modules[&import.module_id];
             match &import.kind {
-                ResolvedImportKind::All => {
-                    for export_name in &dependency.export_order {
-                        self.insert_imported_name(
-                            &mut imported_functions,
-                            module,
-                            dependency,
-                            export_name,
-                            export_name,
-                            &import.span,
-                        )?;
+                ResolvedImportKind::Module(binding) => {
+                    let root = binding.split('.').next().unwrap_or(binding);
+                    if module.exports.contains_key(root) {
+                        return Err(XeError::new(
+                            XeErrorKind::ImportNameConflict(root.to_string()),
+                            Some(import.span.clone()),
+                        ));
+                    }
+                    if scope.modules.insert(binding.clone(), import.module_id).is_some() {
+                        return Err(XeError::new(
+                            XeErrorKind::DuplicateImport(binding.clone()),
+                            Some(import.span.clone()),
+                        ));
                     }
                 }
                 ResolvedImportKind::Names(names) => {
-                    for name in names {
-                        self.insert_imported_name(
-                            &mut imported_functions,
-                            module,
-                            dependency,
-                            name,
-                            name,
-                            &import.span,
-                        )?;
+                    for (name, local) in names {
+                        let Some(symbol) = dependency.exports.get(name) else {
+                            return Err(XeError::new(
+                                XeErrorKind::ImportedNameNotFound {
+                                    module: dependency.path.display().to_string(),
+                                    name: name.clone(),
+                                },
+                                Some(import.span.clone()),
+                            ));
+                        };
+                        if module.exports.contains_key(local) {
+                            return Err(XeError::new(
+                                XeErrorKind::ImportNameConflict(local.clone()),
+                                Some(import.span.clone()),
+                            ));
+                        }
+                        if scope.names.insert(local.clone(), symbol.clone()).is_some() {
+                            return Err(XeError::new(
+                                XeErrorKind::DuplicateImport(local.clone()),
+                                Some(import.span.clone()),
+                            ));
+                        }
                     }
                 }
             }
         }
 
-        Ok(imported_functions)
-    }
-
-    fn insert_imported_name(
-        &self,
-        imported_functions: &mut HashMap<String, String>,
-        module: &ModuleRecord,
-        dependency: &ModuleRecord,
-        imported_name: &str,
-        local_name: &str,
-        span: &Span,
-    ) -> Result<(), XeError> {
-        let Some(target_symbol) = dependency.exports.get(imported_name) else {
-            return Err(XeError::new(
-                XeErrorKind::ImportedNameNotFound {
-                    module: dependency.path.display().to_string(),
-                    name: imported_name.to_string(),
-                },
-                Some(span.clone()),
-            ));
-        };
-
-        if module.exports.contains_key(local_name) || BUILTIN_FUNCTIONS.contains(&local_name) {
-            return Err(XeError::new(
-                XeErrorKind::ImportNameConflict(local_name.to_string()),
-                Some(span.clone()),
-            ));
+        for binding in scope.modules.keys() {
+            let root = binding.split('.').next().unwrap_or(binding);
+            if scope.names.contains_key(root) {
+                return Err(XeError::new(
+                    XeErrorKind::ImportNameConflict(root.to_string()),
+                    None,
+                ));
+            }
         }
 
-        if imported_functions.contains_key(local_name) {
-            return Err(XeError::new(
-                XeErrorKind::DuplicateImport(local_name.to_string()),
-                Some(span.clone()),
-            ));
-        }
-
-        imported_functions.insert(local_name.to_string(), target_symbol.clone());
-        Ok(())
+        Ok(scope)
     }
 
     fn rewrite_statement_block(
         &self,
         statements: &[Statement],
-        module: &ModuleRecord,
-        imported_functions: &HashMap<String, String>,
+        resolver: &Resolver,
         scopes: &mut Vec<HashSet<String>>,
         ctx: Option<&FunctionContext>,
     ) -> Result<Vec<Statement>, XeError> {
         statements
             .iter()
-            .map(|statement| {
-                self.rewrite_statement(statement, module, imported_functions, scopes, ctx)
-            })
+            .map(|statement| self.rewrite_statement(statement, resolver, scopes, ctx))
             .collect()
     }
 
-    /// Resolves a module-level name (own export or import) to its linked symbol.
-    fn module_symbol(
-        &self,
-        name: &str,
-        module: &ModuleRecord,
-        imported_functions: &HashMap<String, String>,
-    ) -> Option<String> {
-        module
+    /// Resolves a module-level name (own export or `from` import) to its linked symbol.
+    fn module_symbol(&self, name: &str, resolver: &Resolver) -> Option<String> {
+        resolver
+            .module
             .exports
             .get(name)
-            .or_else(|| imported_functions.get(name))
+            .or_else(|| resolver.imports.names.get(name))
             .cloned()
     }
 
     fn rewrite_function_def(
         &self,
         statement: &Statement,
-        module: &ModuleRecord,
-        imported_functions: &HashMap<String, String>,
+        resolver: &Resolver,
     ) -> Result<StatementKind, XeError> {
         let StatementKind::FunctionDef { name, params, body } = &statement.kind else {
             unreachable!("rewrite_function_def called on a non-function statement");
@@ -590,30 +405,197 @@ impl ModuleCompiler {
         }
 
         let mut scopes = vec![HashSet::new(), params.iter().cloned().collect()];
-        let rewritten_body = self.rewrite_statement_block(
-            body,
-            module,
-            imported_functions,
-            &mut scopes,
-            Some(&ctx),
-        )?;
+        let rewritten_body = self.rewrite_statement_block(body, resolver, &mut scopes, Some(&ctx))?;
 
         Ok(StatementKind::FunctionDef {
-            name: module
-                .exports
-                .get(name)
-                .cloned()
-                .unwrap_or_else(|| name.clone()),
+            name: resolver.module.exports[name].clone(),
             params: params.clone(),
             body: rewritten_body,
         })
     }
 
+    /// The linked name for an assignment target or catch variable.
+    fn resolve_target(
+        &self,
+        name: &str,
+        resolver: &Resolver,
+        scopes: &mut [HashSet<String>],
+        ctx: Option<&FunctionContext>,
+    ) -> String {
+        match ctx {
+            Some(ctx) if ctx.globals.contains(name) => self
+                .module_symbol(name, resolver)
+                .unwrap_or_else(|| name.to_string()),
+            Some(_) => {
+                if !is_in_local_scope(scopes, name) {
+                    scopes.last_mut().unwrap().insert(name.to_string());
+                }
+                name.to_string()
+            }
+            None => {
+                if is_in_local_scope(scopes, name) {
+                    name.to_string()
+                } else {
+                    self.module_symbol(name, resolver)
+                        .unwrap_or_else(|| name.to_string())
+                }
+            }
+        }
+    }
+
+    /// The linked name for a read of `name` (a variable, a function, or a builtin).
+    fn resolve_read(
+        &self,
+        name: &str,
+        span: &Span,
+        resolver: &Resolver,
+        scopes: &[HashSet<String>],
+        ctx: Option<&FunctionContext>,
+    ) -> Result<String, XeError> {
+        if is_in_local_scope(scopes, name) {
+            return Ok(name.to_string());
+        }
+        if let Some(ctx) = ctx {
+            if ctx.globals.contains(name) {
+                return Ok(self
+                    .module_symbol(name, resolver)
+                    .unwrap_or_else(|| name.to_string()));
+            }
+            if ctx.assigned.contains(name) {
+                // Assigned somewhere in this function, so the name is local everywhere in it.
+                let is_module_variable = self
+                    .module_symbol(name, resolver)
+                    .is_some_and(|symbol| self.variable_symbols.contains(&symbol));
+                if is_module_variable {
+                    return Err(XeError::new(
+                        XeErrorKind::LocalUsedBeforeAssignment(name.to_string()),
+                        Some(span.clone()),
+                    ));
+                }
+                return Ok(name.to_string());
+            }
+        }
+        if let Some(symbol) = self.module_symbol(name, resolver) {
+            return Ok(symbol);
+        }
+        if resolver
+            .imports
+            .modules
+            .keys()
+            .any(|binding| binding.split('.').next() == Some(name))
+        {
+            return Err(XeError::new(
+                XeErrorKind::ModuleUsedAsValue(name.to_string()),
+                Some(span.clone()),
+            ));
+        }
+        Ok(name.to_string())
+    }
+
+    /// The linked name for `object.method(...)` called as a function: a function of
+    /// this module, an imported function, or a builtin. Variables are not methods.
+    fn resolve_method(&self, method: &str, resolver: &Resolver) -> String {
+        match self.module_symbol(method, resolver) {
+            Some(symbol) if !self.variable_symbols.contains(&symbol) => symbol,
+            _ => method.to_string(),
+        }
+    }
+
+    /// If `expression` is `module.member` (possibly followed by more fields), returns the
+    /// module id, the member name and the remaining field names.
+    fn split_module_access<'e>(
+        &self,
+        expression: &'e Expression,
+        resolver: &Resolver,
+        scopes: &[HashSet<String>],
+    ) -> Option<(usize, Vec<&'e str>)> {
+        let mut chain = Vec::new();
+        let mut current = expression;
+        loop {
+            match &current.kind {
+                ExpressionKind::FieldAccess { object, field } => {
+                    chain.push(field.as_str());
+                    current = object;
+                }
+                ExpressionKind::Identifier(root) => {
+                    chain.push(root.as_str());
+                    break;
+                }
+                _ => return None,
+            }
+        }
+        chain.reverse();
+
+        let root = chain[0];
+        if is_in_local_scope(scopes, root) || self.module_symbol(root, resolver).is_some() {
+            return None;
+        }
+        // Longest binding first, so `import a.b` wins over `import a` for `a.b.x`.
+        (1..=chain.len()).rev().find_map(|length| {
+            let binding = chain[..length].join(".");
+            resolver
+                .imports
+                .modules
+                .get(&binding)
+                .map(|module_id| (*module_id, chain[length..].to_vec()))
+        })
+    }
+
+    fn module_member_symbol(
+        &self,
+        module_id: usize,
+        member: &str,
+        span: &Span,
+    ) -> Result<String, XeError> {
+        let dependency = &self.modules[&module_id];
+        dependency.exports.get(member).cloned().ok_or_else(|| {
+            XeError::new(
+                XeErrorKind::ImportedNameNotFound {
+                    module: dependency.path.display().to_string(),
+                    name: member.to_string(),
+                },
+                Some(span.clone()),
+            )
+        })
+    }
+
+    /// Rewrites `module.member.rest...` into the member's symbol followed by field accesses.
+    fn rewrite_module_access(
+        &self,
+        expression: &Expression,
+        resolver: &Resolver,
+        scopes: &[HashSet<String>],
+    ) -> Result<Option<Expression>, XeError> {
+        let Some((module_id, rest)) = self.split_module_access(expression, resolver, scopes) else {
+            return Ok(None);
+        };
+        let span = &expression.span;
+        let Some((member, fields)) = rest.split_first() else {
+            return Err(XeError::new(
+                XeErrorKind::ModuleUsedAsValue(expression_path(expression)),
+                Some(span.clone()),
+            ));
+        };
+        let mut result = Expression {
+            kind: ExpressionKind::Identifier(self.module_member_symbol(module_id, member, span)?),
+            span: span.clone(),
+        };
+        for field in fields {
+            result = Expression {
+                kind: ExpressionKind::FieldAccess {
+                    object: Box::new(result),
+                    field: field.to_string(),
+                },
+                span: span.clone(),
+            };
+        }
+        Ok(Some(result))
+    }
+
     fn rewrite_statement(
         &self,
         statement: &Statement,
-        module: &ModuleRecord,
-        imported_functions: &HashMap<String, String>,
+        resolver: &Resolver,
         scopes: &mut Vec<HashSet<String>>,
         ctx: Option<&FunctionContext>,
     ) -> Result<Statement, XeError> {
@@ -632,37 +614,17 @@ impl ModuleCompiler {
                     names: names
                         .iter()
                         .map(|name| {
-                            self.module_symbol(name, module, imported_functions)
+                            self.module_symbol(name, resolver)
                                 .unwrap_or_else(|| name.clone())
                         })
                         .collect(),
                 }
             }
             StatementKind::Assignment { name, value } => {
-                let rewritten_value =
-                    self.rewrite_expression(value, module, imported_functions, scopes, ctx)?;
-                let rewritten_name = match ctx {
-                    Some(ctx) if ctx.globals.contains(name) => self
-                        .module_symbol(name, module, imported_functions)
-                        .unwrap_or_else(|| name.clone()),
-                    Some(_) => {
-                        if !is_in_local_scope(scopes, name) {
-                            scopes.last_mut().unwrap().insert(name.clone());
-                        }
-                        name.clone()
-                    }
-                    None => {
-                        if is_in_local_scope(scopes, name) {
-                            name.clone()
-                        } else {
-                            self.module_symbol(name, module, imported_functions)
-                                .unwrap_or_else(|| name.clone())
-                        }
-                    }
-                };
+                let value = self.rewrite_expression(value, resolver, scopes, ctx)?;
                 StatementKind::Assignment {
-                    name: rewritten_name,
-                    value: rewritten_value,
+                    name: self.resolve_target(name, resolver, scopes, ctx),
+                    value,
                 }
             }
             StatementKind::If {
@@ -670,44 +632,20 @@ impl ModuleCompiler {
                 then_block,
                 else_block,
             } => StatementKind::If {
-                condition: self.rewrite_expression(
-                    condition,
-                    module,
-                    imported_functions,
-                    scopes,
-                    ctx,
-                )?,
-                then_block: self.rewrite_statement_block(
-                    then_block,
-                    module,
-                    imported_functions,
-                    scopes,
-                    ctx,
-                )?,
+                condition: self.rewrite_expression(condition, resolver, scopes, ctx)?,
+                then_block: self.rewrite_statement_block(then_block, resolver, scopes, ctx)?,
                 else_block: match else_block {
-                    Some(block) => Some(self.rewrite_statement_block(
-                        block,
-                        module,
-                        imported_functions,
-                        scopes,
-                        ctx,
-                    )?),
+                    Some(block) => Some(self.rewrite_statement_block(block, resolver, scopes, ctx)?),
                     None => None,
                 },
             },
             StatementKind::While { condition, body } => StatementKind::While {
-                condition: self.rewrite_expression(
-                    condition,
-                    module,
-                    imported_functions,
-                    scopes,
-                    ctx,
-                )?,
-                body: self.rewrite_statement_block(body, module, imported_functions, scopes, ctx)?,
+                condition: self.rewrite_expression(condition, resolver, scopes, ctx)?,
+                body: self.rewrite_statement_block(body, resolver, scopes, ctx)?,
             },
             StatementKind::Repeat { count, body } => StatementKind::Repeat {
-                count: self.rewrite_expression(count, module, imported_functions, scopes, ctx)?,
-                body: self.rewrite_statement_block(body, module, imported_functions, scopes, ctx)?,
+                count: self.rewrite_expression(count, resolver, scopes, ctx)?,
+                body: self.rewrite_statement_block(body, resolver, scopes, ctx)?,
             },
             StatementKind::For {
                 variable,
@@ -723,62 +661,97 @@ impl ModuleCompiler {
                         Some(statement.span.clone()),
                     ));
                 }
-                let rewritten_iterable =
-                    self.rewrite_expression(iterable, module, imported_functions, scopes, ctx)?;
-                scopes.push(HashSet::new());
-                scopes.last_mut().unwrap().insert(variable.clone());
-                let rewritten_body =
-                    self.rewrite_statement_block(body, module, imported_functions, scopes, ctx);
+                let iterable = self.rewrite_expression(iterable, resolver, scopes, ctx)?;
+                scopes.push(HashSet::from([variable.clone()]));
+                let body = self.rewrite_statement_block(body, resolver, scopes, ctx);
                 scopes.pop();
                 StatementKind::For {
                     variable: variable.clone(),
-                    iterable: rewritten_iterable,
-                    body: rewritten_body?,
+                    iterable,
+                    body: body?,
                 }
             }
-            StatementKind::FunctionDef { .. } => {
-                self.rewrite_function_def(statement, module, imported_functions)?
+            StatementKind::Try {
+                body,
+                catch_variable,
+                handler,
+            } => StatementKind::Try {
+                body: self.rewrite_statement_block(body, resolver, scopes, ctx)?,
+                catch_variable: catch_variable
+                    .as_ref()
+                    .map(|name| self.resolve_target(name, resolver, scopes, ctx)),
+                handler: self.rewrite_statement_block(handler, resolver, scopes, ctx)?,
+            },
+            StatementKind::FunctionDef { .. } | StatementKind::StructDef { .. } => {
+                return Err(XeError::new(
+                    XeErrorKind::NestedDefinition,
+                    Some(statement.span.clone()),
+                ));
             }
             StatementKind::Return { value } => StatementKind::Return {
                 value: match value {
-                    Some(expression) => Some(self.rewrite_expression(
-                        expression,
-                        module,
-                        imported_functions,
-                        scopes,
-                        ctx,
-                    )?),
+                    Some(expression) => {
+                        Some(self.rewrite_expression(expression, resolver, scopes, ctx)?)
+                    }
                     None => None,
                 },
             },
             StatementKind::Break => StatementKind::Break,
             StatementKind::Continue => StatementKind::Continue,
+            StatementKind::Pass => StatementKind::Pass,
             StatementKind::Expression(expression) => StatementKind::Expression(
-                self.rewrite_expression(expression, module, imported_functions, scopes, ctx)?,
+                self.rewrite_expression(expression, resolver, scopes, ctx)?,
             ),
-            StatementKind::StructDef { name, fields } => {
-                let rewritten_name = module
-                    .exports
-                    .get(name)
-                    .cloned()
-                    .unwrap_or_else(|| name.clone());
-                StatementKind::StructDef {
-                    name: rewritten_name,
-                    fields: fields.clone(),
+            StatementKind::IndexAssignment {
+                object,
+                index,
+                value,
+                op,
+            } => StatementKind::IndexAssignment {
+                object: self.rewrite_expression(object, resolver, scopes, ctx)?,
+                index: self.rewrite_expression(index, resolver, scopes, ctx)?,
+                value: self.rewrite_expression(value, resolver, scopes, ctx)?,
+                op: *op,
+            },
+            StatementKind::FieldAssignment {
+                object,
+                field,
+                value,
+                op,
+            } => {
+                let value = self.rewrite_expression(value, resolver, scopes, ctx)?;
+                // `module.x = v` assigns another module's variable.
+                if let Some((module_id, rest)) = self.split_module_access(object, resolver, scopes) {
+                    if rest.is_empty() {
+                        let symbol = self.module_member_symbol(module_id, field, &statement.span)?;
+                        let value = match op {
+                            Some(op) => Expression {
+                                span: value.span.clone(),
+                                kind: ExpressionKind::BinaryOp {
+                                    left: Box::new(Expression {
+                                        kind: ExpressionKind::Identifier(symbol.clone()),
+                                        span: statement.span.clone(),
+                                    }),
+                                    op: *op,
+                                    right: Box::new(value),
+                                },
+                            },
+                            None => value,
+                        };
+                        return Ok(Statement {
+                            kind: StatementKind::Assignment {
+                                name: symbol,
+                                value,
+                            },
+                            span: statement.span.clone(),
+                        });
+                    }
                 }
-            }
-            StatementKind::IndexAssignment { object, index, value } => {
-                StatementKind::IndexAssignment {
-                    object: self.rewrite_expression(object, module, imported_functions, scopes, ctx)?,
-                    index: self.rewrite_expression(index, module, imported_functions, scopes, ctx)?,
-                    value: self.rewrite_expression(value, module, imported_functions, scopes, ctx)?,
-                }
-            }
-            StatementKind::FieldAssignment { object, field, value } => {
                 StatementKind::FieldAssignment {
-                    object: self.rewrite_expression(object, module, imported_functions, scopes, ctx)?,
+                    object: self.rewrite_expression(object, resolver, scopes, ctx)?,
                     field: field.clone(),
-                    value: self.rewrite_expression(value, module, imported_functions, scopes, ctx)?,
+                    value,
+                    op: *op,
                 }
             }
         };
@@ -789,47 +762,44 @@ impl ModuleCompiler {
         })
     }
 
+    fn rewrite_expressions(
+        &self,
+        expressions: &[Expression],
+        resolver: &Resolver,
+        scopes: &[HashSet<String>],
+        ctx: Option<&FunctionContext>,
+    ) -> Result<Vec<Expression>, XeError> {
+        expressions
+            .iter()
+            .map(|expression| self.rewrite_expression(expression, resolver, scopes, ctx))
+            .collect()
+    }
+
     fn rewrite_expression(
         &self,
         expression: &Expression,
-        module: &ModuleRecord,
-        imported_functions: &HashMap<String, String>,
+        resolver: &Resolver,
         scopes: &[HashSet<String>],
         ctx: Option<&FunctionContext>,
     ) -> Result<Expression, XeError> {
-        let rewrite = |expression: &Expression| {
-            self.rewrite_expression(expression, module, imported_functions, scopes, ctx)
-        };
+        let rewrite = |expression: &Expression| self.rewrite_expression(expression, resolver, scopes, ctx);
+        let span = &expression.span;
         let kind = match &expression.kind {
             ExpressionKind::Number(value) => ExpressionKind::Number(*value),
             ExpressionKind::String(value) => ExpressionKind::String(value.clone()),
             ExpressionKind::Boolean(value) => ExpressionKind::Boolean(*value),
+            ExpressionKind::None => ExpressionKind::None,
             ExpressionKind::List(elements) => {
-                ExpressionKind::List(elements.iter().map(rewrite).collect::<Result<_, _>>()?)
+                ExpressionKind::List(self.rewrite_expressions(elements, resolver, scopes, ctx)?)
             }
+            ExpressionKind::Map(entries) => ExpressionKind::Map(
+                entries
+                    .iter()
+                    .map(|(k, v)| Ok((rewrite(k)?, rewrite(v)?)))
+                    .collect::<Result<_, XeError>>()?,
+            ),
             ExpressionKind::Identifier(name) => {
-                let rewritten_name = if is_in_local_scope(scopes, name) {
-                    name.clone()
-                } else if ctx.is_some_and(|ctx| ctx.globals.contains(name)) {
-                    self.module_symbol(name, module, imported_functions)
-                        .unwrap_or_else(|| name.clone())
-                } else if ctx.is_some_and(|ctx| ctx.assigned.contains(name)) {
-                    // Assigned somewhere in this function, so the name is local everywhere in it.
-                    let is_module_variable = self
-                        .module_symbol(name, module, imported_functions)
-                        .is_some_and(|symbol| self.variable_symbols.contains(&symbol));
-                    if is_module_variable {
-                        return Err(XeError::new(
-                            XeErrorKind::LocalUsedBeforeAssignment(name.clone()),
-                            Some(expression.span.clone()),
-                        ));
-                    }
-                    name.clone()
-                } else {
-                    self.module_symbol(name, module, imported_functions)
-                        .unwrap_or_else(|| name.clone())
-                };
-                ExpressionKind::Identifier(rewritten_name)
+                ExpressionKind::Identifier(self.resolve_read(name, span, resolver, scopes, ctx)?)
             }
             ExpressionKind::BinaryOp { left, op, right } => ExpressionKind::BinaryOp {
                 left: Box::new(rewrite(left)?),
@@ -840,68 +810,71 @@ impl ModuleCompiler {
                 op: *op,
                 operand: Box::new(rewrite(operand)?),
             },
-            ExpressionKind::FunctionCall { name, args } => {
-                let rewritten_name = if BUILTIN_FUNCTIONS.contains(&name.as_str())
-                    || is_in_local_scope(scopes, name)
-                {
-                    name.clone()
-                } else {
-                    self.module_symbol(name, module, imported_functions)
-                        .unwrap_or_else(|| name.clone())
-                };
-
-                ExpressionKind::FunctionCall {
-                    name: rewritten_name,
-                    args: args.iter().map(rewrite).collect::<Result<_, _>>()?,
+            ExpressionKind::FunctionCall { name, args } => ExpressionKind::FunctionCall {
+                name: self.resolve_read(name, span, resolver, scopes, ctx)?,
+                args: self.rewrite_expressions(args, resolver, scopes, ctx)?,
+            },
+            ExpressionKind::MethodCall {
+                object,
+                method,
+                args,
+            } => {
+                let args = self.rewrite_expressions(args, resolver, scopes, ctx)?;
+                match self.split_module_access(object, resolver, scopes) {
+                    // `module.function(args)`
+                    Some((module_id, rest)) if rest.is_empty() => ExpressionKind::FunctionCall {
+                        name: self.module_member_symbol(module_id, method, span)?,
+                        args,
+                    },
+                    _ => ExpressionKind::MethodCall {
+                        object: Box::new(rewrite(object)?),
+                        method: self.resolve_method(method, resolver),
+                        args,
+                    },
+                }
+            }
+            ExpressionKind::Call { callee, args } => ExpressionKind::Call {
+                callee: Box::new(rewrite(callee)?),
+                args: self.rewrite_expressions(args, resolver, scopes, ctx)?,
+            },
+            ExpressionKind::Lambda { params, body } => {
+                let mut inner_scopes = scopes.to_vec();
+                inner_scopes.push(params.iter().cloned().collect());
+                ExpressionKind::Lambda {
+                    params: params.clone(),
+                    body: Box::new(self.rewrite_expression(body, resolver, &inner_scopes, ctx)?),
                 }
             }
             ExpressionKind::Index { object, index } => ExpressionKind::Index {
                 object: Box::new(rewrite(object)?),
                 index: Box::new(rewrite(index)?),
             },
-            ExpressionKind::Map(entries) => ExpressionKind::Map(
-                entries
-                    .iter()
-                    .map(|(k, v)| Ok((rewrite(k)?, rewrite(v)?)))
-                    .collect::<Result<_, XeError>>()?,
-            ),
-            ExpressionKind::FieldAccess { object, field } => ExpressionKind::FieldAccess {
+            ExpressionKind::Slice { object, start, end } => ExpressionKind::Slice {
                 object: Box::new(rewrite(object)?),
-                field: field.clone(),
+                start: match start {
+                    Some(start) => Some(Box::new(rewrite(start)?)),
+                    None => None,
+                },
+                end: match end {
+                    Some(end) => Some(Box::new(rewrite(end)?)),
+                    None => None,
+                },
             },
+            ExpressionKind::FieldAccess { object, field } => {
+                if let Some(rewritten) = self.rewrite_module_access(expression, resolver, scopes)? {
+                    return Ok(rewritten);
+                }
+                ExpressionKind::FieldAccess {
+                    object: Box::new(rewrite(object)?),
+                    field: field.clone(),
+                }
+            }
         };
 
         Ok(Expression {
             kind,
-            span: expression.span.clone(),
+            span: span.clone(),
         })
-    }
-
-    fn link_top_level_executable_statements(
-        &self,
-        module: &ModuleRecord,
-        imported_functions: &HashMap<String, String>,
-    ) -> Result<Vec<Statement>, XeError> {
-        let mut linked = Vec::new();
-        let mut scopes = vec![HashSet::new()];
-
-        for statement in &module.program.statements {
-            match &statement.kind {
-                StatementKind::Import { .. }
-                | StatementKind::FromImport { .. }
-                | StatementKind::FunctionDef { .. }
-                | StatementKind::StructDef { .. } => {}
-                _ => linked.push(self.rewrite_statement(
-                    statement,
-                    module,
-                    imported_functions,
-                    &mut scopes,
-                    None,
-                )?),
-            }
-        }
-
-        Ok(linked)
     }
 
     fn initialization_order(&self, entry_id: usize) -> Vec<usize> {
@@ -926,7 +899,7 @@ impl ModuleCompiler {
             return;
         }
 
-        let module = self.modules.get(&module_id).unwrap();
+        let module = &self.modules[&module_id];
         for import in &module.imports {
             self.visit_module_dependencies(import.module_id, visited, emitted, ordered);
             if emitted.insert(import.module_id) {
@@ -954,6 +927,163 @@ impl ModuleCompiler {
     }
 }
 
+fn validate_import_placement(program: &Program) -> Result<(), XeError> {
+    let mut seen_executable_statement = false;
+
+    for statement in &program.statements {
+        match &statement.kind {
+            StatementKind::Import { .. } | StatementKind::FromImport { .. } => {
+                if seen_executable_statement {
+                    return Err(XeError::new(
+                        XeErrorKind::ImportAfterExecutableStatement,
+                        Some(statement.span.clone()),
+                    ));
+                }
+            }
+            StatementKind::FunctionDef { .. } | StatementKind::StructDef { .. } => {}
+            _ => seen_executable_statement = true,
+        }
+    }
+
+    Ok(())
+}
+
+/// Imports must be at the top level, and functions and structs may not be nested.
+fn validate_nesting(statement: &Statement, is_top_level: bool) -> Result<(), XeError> {
+    let nested: Vec<&Vec<Statement>> = match &statement.kind {
+        StatementKind::Import { .. } | StatementKind::FromImport { .. } if !is_top_level => {
+            return Err(XeError::new(
+                XeErrorKind::ImportNotTopLevel,
+                Some(statement.span.clone()),
+            ));
+        }
+        StatementKind::FunctionDef { .. } | StatementKind::StructDef { .. } if !is_top_level => {
+            return Err(XeError::new(
+                XeErrorKind::NestedDefinition,
+                Some(statement.span.clone()),
+            ));
+        }
+        StatementKind::If {
+            then_block,
+            else_block,
+            ..
+        } => std::iter::once(then_block).chain(else_block.as_ref()).collect(),
+        StatementKind::Try { body, handler, .. } => vec![body, handler],
+        StatementKind::While { body, .. }
+        | StatementKind::Repeat { body, .. }
+        | StatementKind::For { body, .. }
+        | StatementKind::FunctionDef { body, .. } => vec![body],
+        _ => Vec::new(),
+    };
+    for block in nested {
+        for statement in block {
+            validate_nesting(statement, false)?;
+        }
+    }
+    Ok(())
+}
+
+/// Every module-level name and its linked symbol, plus which of them are variables.
+/// Variables are all names assigned in top-level code (including inside blocks) and
+/// names declared `global` inside functions.
+fn collect_exports(
+    module_id: usize,
+    program: &Program,
+) -> Result<(HashMap<String, String>, HashSet<String>), XeError> {
+    let symbol = |name: &str| format!("xe_m{}_{}", module_id, sanitize_symbol(name));
+    let mut exports = HashMap::new();
+    let mut variables = HashSet::new();
+
+    for statement in &program.statements {
+        if let StatementKind::FunctionDef { name, .. } | StatementKind::StructDef { name, .. } =
+            &statement.kind
+        {
+            if exports.insert(name.clone(), symbol(name)).is_some() {
+                return Err(XeError::new(
+                    XeErrorKind::DuplicateFunction(name.clone()),
+                    Some(statement.span.clone()),
+                ));
+            }
+        }
+    }
+
+    let mut top_level_targets = Vec::new();
+    for statement in &program.statements {
+        if !matches!(
+            statement.kind,
+            StatementKind::FunctionDef { .. } | StatementKind::StructDef { .. }
+        ) {
+            collect_top_level_targets(statement, &mut top_level_targets);
+        }
+    }
+    let mut declared_globals = Vec::new();
+    for statement in &program.statements {
+        if let StatementKind::FunctionDef { body, .. } = &statement.kind {
+            declared_globals.extend(collect_global_declarations(body));
+        }
+    }
+
+    for (name, span) in top_level_targets.into_iter().chain(declared_globals) {
+        if variables.contains(&name) {
+            continue;
+        }
+        if exports.contains_key(&name) {
+            return Err(XeError::new(
+                XeErrorKind::InvalidGlobal(format!(
+                    "'{}' is a function or struct and cannot also be used as a variable",
+                    name
+                )),
+                Some(span),
+            ));
+        }
+        exports.insert(name.clone(), symbol(&name));
+        variables.insert(name);
+    }
+
+    Ok((exports, variables))
+}
+
+/// Names assigned by top-level code, excluding top-level loop variables (which are
+/// scoped to their loop) unless they are also assigned elsewhere.
+fn collect_top_level_targets(statement: &Statement, targets: &mut Vec<(String, Span)>) {
+    match &statement.kind {
+        StatementKind::Assignment { name, .. } => {
+            targets.push((name.clone(), statement.span.clone()));
+        }
+        StatementKind::Try {
+            body,
+            catch_variable,
+            handler,
+        } => {
+            body.iter().for_each(|s| collect_top_level_targets(s, targets));
+            if let Some(name) = catch_variable {
+                targets.push((name.clone(), statement.span.clone()));
+            }
+            handler.iter().for_each(|s| collect_top_level_targets(s, targets));
+        }
+        StatementKind::If {
+            then_block,
+            else_block,
+            ..
+        } => {
+            then_block.iter().for_each(|s| collect_top_level_targets(s, targets));
+            if let Some(else_block) = else_block {
+                else_block.iter().for_each(|s| collect_top_level_targets(s, targets));
+            }
+        }
+        StatementKind::For { variable, body, .. } => {
+            // Assignments to the loop variable inside its loop do not create a global.
+            let mut inner = Vec::new();
+            body.iter().for_each(|s| collect_top_level_targets(s, &mut inner));
+            targets.extend(inner.into_iter().filter(|(name, _)| name != variable));
+        }
+        StatementKind::While { body, .. } | StatementKind::Repeat { body, .. } => {
+            body.iter().for_each(|s| collect_top_level_targets(s, targets));
+        }
+        _ => {}
+    }
+}
+
 /// Names a function assigns (locals) and declares `global`, following Python's rule:
 /// a name assigned anywhere in a function is local to it unless declared `global`.
 struct FunctionContext {
@@ -964,7 +1094,21 @@ struct FunctionContext {
 impl FunctionContext {
     fn collect(body: &[Statement]) -> Self {
         let mut assigned = HashSet::new();
-        collect_assigned_names(body, &mut assigned);
+        visit_function_body(body, &mut |statement| match &statement.kind {
+            StatementKind::Assignment { name, .. } => {
+                assigned.insert(name.clone());
+            }
+            StatementKind::For { variable, .. } => {
+                assigned.insert(variable.clone());
+            }
+            StatementKind::Try {
+                catch_variable: Some(name),
+                ..
+            } => {
+                assigned.insert(name.clone());
+            }
+            _ => {}
+        });
         let globals: HashSet<String> = collect_global_declarations(body)
             .into_iter()
             .map(|(name, _)| name)
@@ -974,8 +1118,7 @@ impl FunctionContext {
     }
 }
 
-/// Visits every statement of a function body, descending into nested blocks
-/// but not into nested function definitions.
+/// Visits every statement of a function body, descending into nested blocks.
 fn visit_function_body(statements: &[Statement], visit: &mut dyn FnMut(&Statement)) {
     for statement in statements {
         visit(statement);
@@ -990,24 +1133,16 @@ fn visit_function_body(statements: &[Statement], visit: &mut dyn FnMut(&Statemen
                     visit_function_body(else_block, visit);
                 }
             }
+            StatementKind::Try { body, handler, .. } => {
+                visit_function_body(body, visit);
+                visit_function_body(handler, visit);
+            }
             StatementKind::While { body, .. }
             | StatementKind::Repeat { body, .. }
             | StatementKind::For { body, .. } => visit_function_body(body, visit),
             _ => {}
         }
     }
-}
-
-fn collect_assigned_names(statements: &[Statement], assigned: &mut HashSet<String>) {
-    visit_function_body(statements, &mut |statement| match &statement.kind {
-        StatementKind::Assignment { name, .. } => {
-            assigned.insert(name.clone());
-        }
-        StatementKind::For { variable, .. } => {
-            assigned.insert(variable.clone());
-        }
-        _ => {}
-    });
 }
 
 fn collect_global_declarations(statements: &[Statement]) -> Vec<(String, Span)> {
@@ -1020,6 +1155,17 @@ fn collect_global_declarations(statements: &[Statement]) -> Vec<(String, Span)> 
         }
     });
     globals
+}
+
+/// `a.b.c` for an identifier/field chain, used in error messages.
+fn expression_path(expression: &Expression) -> String {
+    match &expression.kind {
+        ExpressionKind::Identifier(name) => name.clone(),
+        ExpressionKind::FieldAccess { object, field } => {
+            format!("{}.{}", expression_path(object), field)
+        }
+        _ => "expression".to_string(),
+    }
 }
 
 fn sanitize_symbol(name: &str) -> String {
@@ -1035,11 +1181,5 @@ fn sanitize_symbol(name: &str) -> String {
 }
 
 fn is_in_local_scope(scopes: &[HashSet<String>], name: &str) -> bool {
-    for scope in scopes.iter().skip(1).rev() {
-        if scope.contains(name) {
-            return true;
-        }
-    }
-    false
+    scopes.iter().skip(1).rev().any(|scope| scope.contains(name))
 }
-

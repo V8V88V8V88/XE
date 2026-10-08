@@ -585,7 +585,7 @@ print(item)
 }
 
 #[test]
-fn test_if_block_variable_scope_is_local() {
+fn test_variables_assigned_in_if_blocks_are_visible_after_them() {
     let result = run_xe(
         r#"
 if true:
@@ -594,8 +594,7 @@ if true:
 print(inner)
 "#,
     );
-    assert!(result.is_err());
-    assert!(result.unwrap_err().contains("undefined variable"));
+    assert_eq!(result.unwrap(), "42\n");
 }
 
 #[test]
@@ -642,7 +641,7 @@ fn test_runtime_error_for_invalid_number_conversion() {
     assert!(result.is_err());
     assert!(result
         .unwrap_err()
-        .contains("Runtime error: cannot convert text 'abc' to number"));
+        .contains("cannot convert text 'abc' to number"));
 }
 
 #[test]
@@ -651,7 +650,7 @@ fn test_runtime_error_for_invalid_length_argument() {
     assert!(result.is_err());
     assert!(result
         .unwrap_err()
-        .contains("Runtime error: length() expected text, list, map, or struct, got boolean"));
+        .contains("length() expected text, list, map, or struct, got boolean"));
 }
 
 #[test]
@@ -683,14 +682,16 @@ print(items[5])
 }
 
 #[test]
-fn test_runtime_error_for_negative_index() {
+fn test_negative_index_counts_from_the_end() {
     let result = run_xe(
         r#"
 items = [1, 2, 3]
-print(items[-1])
+print(items[-1], items[-3])
+print(items[-4])
 "#,
     );
-    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(err.contains("list index -4 out of bounds (length 3)"), "{}", err);
 }
 
 #[test]
@@ -847,7 +848,7 @@ fun double(n):
 }
 
 #[test]
-fn test_import_all_brings_exported_functions_into_scope() {
+fn test_import_binds_module_namespace() {
     let output = run_xe_project(
         "main.xe",
         &[
@@ -855,7 +856,7 @@ fn test_import_all_brings_exported_functions_into_scope() {
                 "main.xe",
                 r#"
 import helpers
-print(square(7))
+print(helpers.square(7))
 "#,
             ),
             (
@@ -1251,7 +1252,8 @@ print(items[5])
 
     assert!(result.is_err());
     let err = result.unwrap_err();
-    assert!(err.contains("Runtime error: list index 5 out of bounds"));
+    assert!(err.contains("at line 3: list index 5 out of bounds (length 2)"), "{}", err);
+    assert!(err.contains("print(items[5])"), "{}", err);
 }
 
 #[test]
@@ -1681,6 +1683,224 @@ fn test_invalid_targets_and_parameters_are_compile_errors() {
     let err = run_xe("s = \"abc\"\ns[0] = \"z\"\n").unwrap_err();
     assert!(err.contains("cannot assign to an element of a text value"), "{}", err);
 
-    let err = run_xe("xs = [1]\nappend(xs, \"a\")\n").unwrap_err();
-    assert!(err.contains("type mismatch"), "{}", err);
+    let err = run_xe("xs = 1\nappend(xs, \"a\")\n").unwrap_err();
+    assert!(err.contains("type mismatch: expected list, got number"), "{}", err);
+}
+
+#[test]
+fn test_lists_maps_and_structs_are_shared_references() {
+    let code = r#"
+fun fill(items):
+    items.append(99)
+a = [1]
+b = a
+fill(b)
+c = copy(a)
+c.append(5)
+print(a, b, c)
+"#;
+    assert_eq!(run_xe(code).unwrap(), "[1, 99] [1, 99] [1, 99, 5]\n");
+}
+
+#[test]
+fn test_operators_precedence_and_augmented_assignment() {
+    let code = r#"
+x = 3
+print(not x == 5, -2 ** 2, 2 ** 3 ** 2, 7 // 2, -7 // 2, -7 % 3)
+n = 10
+n += 5
+n //= 2
+n **= 2
+print(n, "apple" < "banana", 2 in [1, 2], "z" not in "abc")
+grid = [[1, 2], [3, 4]]
+grid[1][0] *= 10
+print(grid)
+"#;
+    assert_eq!(
+        run_xe(code).unwrap(),
+        "true -4 512 3 -4 2\n49 true true true\n[[1, 2], [30, 4]]\n"
+    );
+}
+
+#[test]
+fn test_slicing_negative_indexes_and_range() {
+    let code = r#"
+items = [10, 20, 30, 40]
+print(items[-1], items[1:3], items[:2], items[2:], items[-2:], items[5:9])
+print("hello"[1:-1], "hello"[-1])
+total = 0
+for i in range(1, 10, 2):
+    total += i
+print(total, range(3), range(5, 0, -2))
+"#;
+    assert_eq!(
+        run_xe(code).unwrap(),
+        "40 [20, 30] [10, 20] [30, 40] [30, 40] []\nell o\n25 [0, 1, 2] [5, 3, 1]\n"
+    );
+}
+
+#[test]
+fn test_truthiness_and_none() {
+    let code = r#"
+for value in [0, 1, "", "a", [], [0], none, {}]:
+    if value:
+        print("truthy", value)
+x = none
+print(x == none, type(x))
+"#;
+    assert_eq!(
+        run_xe(code).unwrap(),
+        "truthy 1\ntruthy a\ntruthy [0]\ntrue none\n"
+    );
+}
+
+#[test]
+fn test_python_style_function_scope_and_definite_assignment() {
+    let code = r#"
+fun describe(n):
+    if n > 0:
+        label = "positive"
+    else:
+        label = "not positive"
+    return label
+print(describe(1), describe(-1))
+"#;
+    assert_eq!(run_xe(code).unwrap(), "positive not positive\n");
+
+    let err = run_xe("fun f(n):\n    if n > 0:\n        r = 1\n    return r\n").unwrap_err();
+    assert!(err.contains("variable 'r' might not be assigned yet"), "{}", err);
+}
+
+#[test]
+fn test_functions_are_values_and_lambdas_capture() {
+    let code = r#"
+fun apply(f, items):
+    out = []
+    for item in items:
+        out.append(f(item))
+    return out
+fun make_adder(n):
+    return lambda x: x + n
+adders = []
+for k in range(3):
+    adders.append(lambda x: x * k)
+print(apply(upper, ["a"]), apply(make_adder(10), [1, 2]), adders[2](5), print == print)
+"#;
+    assert_eq!(run_xe(code).unwrap(), "[\"A\"] [11, 12] 10 true\n");
+}
+
+#[test]
+fn test_try_catch_with_control_flow() {
+    let code = r#"
+fun safe_div(a, b):
+    try:
+        return a / b
+    catch err:
+        print("caught:", err)
+        return 0
+print(safe_div(10, 2), safe_div(1, 0))
+for i in range(5):
+    try:
+        if i == 1:
+            continue
+        if i == 3:
+            break
+        error("fail " + convert(i, "text"))
+    catch e:
+        print(e)
+"#;
+    assert_eq!(
+        run_xe(code).unwrap(),
+        "caught: division by zero\n5 0\nfail 0\nfail 2\n"
+    );
+}
+
+#[test]
+fn test_maps_keep_insertion_order_and_typed_keys() {
+    let code = r#"
+m = {"zebra": 1, "apple": 2, 1: "number one", "1": "text one"}
+m[true] = "yes"
+remove(m, "apple")
+print(keys(m), m[1], m["1"], length(m))
+"#;
+    assert_eq!(
+        run_xe(code).unwrap(),
+        "[\"zebra\", 1, \"1\", true] number one text one 4\n"
+    );
+}
+
+#[test]
+fn test_method_call_syntax_and_text_builtins() {
+    let code = r#"
+s = "  Hello World  "
+words = s.trim().split()
+print(words, s.upper().trim(), replace("a-b", "-", "+"), find("hello", "l"))
+print(round(2.567, 2), abs(-3), max(3, 9, 2), min([4, 1]), sum([1, 2]), [3, 1, 2].sort())
+"#;
+    assert_eq!(
+        run_xe(code).unwrap(),
+        "[\"Hello\", \"World\"] HELLO WORLD a+b 2\n2.57 3 9 1 3 [1, 2, 3]\n"
+    );
+}
+
+#[test]
+fn test_namespaced_imports_with_aliases() {
+    let output = run_xe_project(
+        "main.xe",
+        &[
+            (
+                "main.xe",
+                r#"
+import util as u
+from util import shout as yell
+print(u.shout("hi"), yell("x"), u.greeting)
+u.greeting = "changed"
+print(u.greeting)
+"#,
+            ),
+            (
+                "util.xe",
+                r#"
+greeting = "hello"
+fun shout(t):
+    return upper(t) + "!"
+"#,
+            ),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(output, "HI! X! hello\nchanged\n");
+}
+
+#[test]
+fn test_runtime_errors_report_location_and_syntax_errors_show_source() {
+    let err = run_xe("items = [1]\nx = 1\nprint(items[3])\n").unwrap_err();
+    assert!(err.contains("at line 3: list index 3 out of bounds (length 1)"), "{}", err);
+    assert!(err.contains("print(items[3])"), "{}", err);
+
+    let err = run_xe("x = 5\nif x > 3\n    print(x)\n").unwrap_err();
+    assert!(err.contains("line 2, column 1: expected ':'"), "{}", err);
+    assert!(err.contains("if x > 3"), "{}", err);
+}
+
+#[test]
+fn test_program_arguments_and_exit_code() {
+    let id = get_unique_id();
+    let temp_dir = std::env::temp_dir().join(format!("xe_args_test_{}", id));
+    let _ = fs::create_dir_all(&temp_dir);
+    let file = temp_dir.join("args.xe");
+    fs::write(&file, "print(args())\nexit(convert(args()[1], \"number\"))\n").unwrap();
+
+    let output = xe_command()
+        .arg("run")
+        .arg(&file)
+        .arg("hello")
+        .arg("7")
+        .output()
+        .unwrap();
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "[\"hello\", \"7\"]\n");
+    assert_eq!(output.status.code(), Some(7));
 }

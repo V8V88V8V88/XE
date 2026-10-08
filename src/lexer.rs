@@ -29,6 +29,12 @@ pub enum TokenKind {
     From,
     Struct,
     Global,
+    None,
+    Pass,
+    Try,
+    Catch,
+    Lambda,
+    As,
 
     // Operators
     Plus,
@@ -36,6 +42,15 @@ pub enum TokenKind {
     Star,
     Slash,
     Percent,
+    StarStar,
+    SlashSlash,
+    PlusEqual,
+    MinusEqual,
+    StarEqual,
+    SlashEqual,
+    SlashSlashEqual,
+    PercentEqual,
+    StarStarEqual,
     Equal,
     EqualEqual,
     NotEqual,
@@ -348,6 +363,12 @@ impl Lexer {
             "from" => TokenKind::From,
             "struct" => TokenKind::Struct,
             "global" => TokenKind::Global,
+            "none" => TokenKind::None,
+            "pass" => TokenKind::Pass,
+            "try" => TokenKind::Try,
+            "catch" => TokenKind::Catch,
+            "lambda" => TokenKind::Lambda,
+            "as" => TokenKind::As,
             _ => TokenKind::Identifier(ident),
         };
 
@@ -359,11 +380,25 @@ impl Lexer {
         self.advance();
 
         let kind = match c {
-            '+' => TokenKind::Plus,
-            '-' => TokenKind::Minus,
-            '*' => TokenKind::Star,
-            '/' => TokenKind::Slash,
-            '%' => TokenKind::Percent,
+            '+' => self.with_assign(TokenKind::Plus, TokenKind::PlusEqual),
+            '-' => self.with_assign(TokenKind::Minus, TokenKind::MinusEqual),
+            '*' => {
+                if self.peek() == '*' {
+                    self.advance();
+                    self.with_assign(TokenKind::StarStar, TokenKind::StarStarEqual)
+                } else {
+                    self.with_assign(TokenKind::Star, TokenKind::StarEqual)
+                }
+            }
+            '/' => {
+                if self.peek() == '/' {
+                    self.advance();
+                    self.with_assign(TokenKind::SlashSlash, TokenKind::SlashSlashEqual)
+                } else {
+                    self.with_assign(TokenKind::Slash, TokenKind::SlashEqual)
+                }
+            }
+            '%' => self.with_assign(TokenKind::Percent, TokenKind::PercentEqual),
             '(' => {
                 self.delimiter_depth += 1;
                 TokenKind::LeftParen
@@ -434,6 +469,16 @@ impl Lexer {
         };
 
         Ok(self.make_token(kind, self.line, start_column))
+    }
+
+    /// Returns `assign` and consumes the '=' when one follows, otherwise returns `plain`.
+    fn with_assign(&mut self, plain: TokenKind, assign: TokenKind) -> TokenKind {
+        if self.peek() == '=' {
+            self.advance();
+            assign
+        } else {
+            plain
+        }
     }
 
     fn skip_whitespace_same_line(&mut self) {

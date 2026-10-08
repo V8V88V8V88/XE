@@ -1,7 +1,13 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ast::*;
+use crate::builtins::Builtin;
 use crate::error::{Span, XeError, XeErrorKind, XeResult};
+
+/// Analyzes a linked program and produces the typed program.
+pub fn analyze_program(program: &Program) -> XeResult<TypedProgram> {
+    SemanticAnalyzer::new().analyze(program)
+}
 
 #[derive(Clone)]
 struct SymbolInfo {
@@ -12,6 +18,26 @@ struct SymbolInfo {
     declared: bool,
 }
 
+struct FunctionInfo {
+    params: Vec<XeType>,
+    return_type: XeType,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum ScopeKind {
+    /// Parameters and every variable assigned in a function body.
+    FunctionLocals,
+    /// A `for` loop variable.
+    Loop,
+    /// Lambda parameters.
+    Lambda,
+}
+
+struct Scope {
+    kind: ScopeKind,
+    vars: HashMap<String, SymbolInfo>,
+}
+
 /// Return statements seen while analyzing the current function body.
 #[derive(Default)]
 struct ReturnInfo {
@@ -19,139 +45,56 @@ struct ReturnInfo {
     has_bare_return: bool,
 }
 
-#[derive(Clone)]
-struct FunctionSignature {
-    params: Option<Vec<XeType>>, // None means variadic
-    return_type: XeType,
+struct FunctionState {
+    returns: ReturnInfo,
+    locals: Vec<(String, XeType)>,
+    /// Locals definitely assigned at the current point; `None` when unreachable.
+    assigned: Option<HashSet<String>>,
 }
 
-const BUILTINS: &[(&str, Option<usize>)] = &[
-    ("print", None),      // variadic
-    ("input", Some(1)),   // 1 arg (prompt)
-    ("length", Some(1)),  // 1 arg
-    ("type", Some(1)),    // 1 arg
-    ("convert", Some(2)), // 2 args (value, target_type)
-    ("append", Some(2)),  // 2 args (list, item)
-    ("pop", Some(1)),     // 1 arg (list)
-    ("keys", Some(1)),    // 1 arg (map or struct)
-    ("values", Some(1)),  // 1 arg (map or struct)
-    ("has_key", Some(2)), // 2 args (map/struct, key)
-    ("contains", Some(2)),// 2 args (collection, item)
-    ("split", Some(2)),   // 2 args (text, delimiter)
-    ("join", Some(2)),    // 2 args (list, delimiter)
-];
+struct LambdaFrame {
+    scope_index: usize,
+    captures: Vec<(String, XeType)>,
+}
 
-fn get_builtin_signature(name: &str) -> Option<FunctionSignature> {
-    match name {
-        "print" => Some(FunctionSignature {
-            params: None,
-            return_type: XeType::Void,
-        }),
-        "input" => Some(FunctionSignature {
-            params: Some(vec![XeType::Text]),
-            return_type: XeType::Text,
-        }),
-        "length" => Some(FunctionSignature {
-            params: Some(vec![XeType::Unknown]),
-            return_type: XeType::Number,
-        }),
-        "type" => Some(FunctionSignature {
-            params: Some(vec![XeType::Unknown]),
-            return_type: XeType::Text,
-        }),
-        "convert" => Some(FunctionSignature {
-            params: Some(vec![XeType::Unknown, XeType::Text]),
-            return_type: XeType::Unknown,
-        }),
-        "append" => Some(FunctionSignature {
-            params: Some(vec![XeType::Unknown, XeType::Unknown]),
-            return_type: XeType::Unknown,
-        }),
-        "pop" => Some(FunctionSignature {
-            params: Some(vec![XeType::Unknown]),
-            return_type: XeType::Unknown,
-        }),
-        "keys" => Some(FunctionSignature {
-            params: Some(vec![XeType::Unknown]),
-            return_type: XeType::List(Box::new(XeType::Text)),
-        }),
-        "values" => Some(FunctionSignature {
-            params: Some(vec![XeType::Unknown]),
-            return_type: XeType::List(Box::new(XeType::Unknown)),
-        }),
-        "has_key" => Some(FunctionSignature {
-            params: Some(vec![XeType::Unknown, XeType::Unknown]),
-            return_type: XeType::Boolean,
-        }),
-        "contains" => Some(FunctionSignature {
-            params: Some(vec![XeType::Unknown, XeType::Unknown]),
-            return_type: XeType::Boolean,
-        }),
-        "split" => Some(FunctionSignature {
-            params: Some(vec![XeType::Text, XeType::Text]),
-            return_type: XeType::List(Box::new(XeType::Text)),
-        }),
-        "join" => Some(FunctionSignature {
-            params: Some(vec![XeType::Unknown, XeType::Text]),
-            return_type: XeType::Text,
-        }),
-        _ => None,
-    }
+enum VarLocation {
+    Local(usize),
+    Global,
 }
 
 pub struct SemanticAnalyzer {
     globals: HashMap<String, SymbolInfo>,
     global_order: Vec<String>,
-    /// Block scopes of top-level code, or the scopes of the function being analyzed.
-    scopes: Vec<HashMap<String, SymbolInfo>>,
-    functions: HashMap<String, FunctionSignature>,
+    scopes: Vec<Scope>,
+    functions: HashMap<String, FunctionInfo>,
     structs: HashMap<String, Vec<String>>,
     loop_depth: usize,
-    function_depth: usize,
-    return_info: Option<ReturnInfo>,
+    function: Option<FunctionState>,
+    lambdas: Vec<LambdaFrame>,
 }
 
 impl SemanticAnalyzer {
-    pub fn new() -> Self {
-        let mut functions = HashMap::new();
-        for (name, _) in BUILTINS {
-            if let Some(sig) = get_builtin_signature(name) {
-                functions.insert(name.to_string(), sig);
-            }
-        }
-
+    fn new() -> Self {
         Self {
             globals: HashMap::new(),
             global_order: Vec::new(),
             scopes: Vec::new(),
-            functions,
+            functions: HashMap::new(),
             structs: HashMap::new(),
             loop_depth: 0,
-            function_depth: 0,
-            return_info: None,
+            function: None,
+            lambdas: Vec::new(),
         }
     }
 
-    pub fn analyze(&mut self, program: &Program) -> XeResult<TypedProgram> {
+    fn analyze(&mut self, program: &Program) -> XeResult<TypedProgram> {
         // Pass 1: Collect function signatures, structs and module-level variables
         for stmt in &program.statements {
             match &stmt.kind {
                 StatementKind::FunctionDef { name, params, body } => {
-                    if BUILTINS.iter().any(|(n, _)| n == name) {
-                        return Err(XeError::new(
-                            XeErrorKind::CannotRedefineBuiltin(name.clone()),
-                            Some(stmt.span.clone()),
-                        ));
-                    }
-                    if self.functions.contains_key(name) || self.structs.contains_key(name) {
-                        return Err(XeError::new(
-                            XeErrorKind::DuplicateFunction(name.clone()),
-                            Some(stmt.span.clone()),
-                        ));
-                    }
-
-                    self.functions.insert(name.clone(), FunctionSignature {
-                        params: Some(vec![XeType::Unknown; params.len()]),
+                    self.check_new_definition(name, &stmt.span)?;
+                    self.functions.insert(name.clone(), FunctionInfo {
+                        params: vec![XeType::Unknown; params.len()],
                         return_type: XeType::Unknown,
                     });
 
@@ -162,29 +105,21 @@ impl SemanticAnalyzer {
                     }
                 }
                 StatementKind::StructDef { name, fields } => {
-                    if BUILTINS.iter().any(|(n, _)| n == name) {
-                        return Err(XeError::new(
-                            XeErrorKind::CannotRedefineBuiltin(name.clone()),
-                            Some(stmt.span.clone()),
-                        ));
-                    }
-                    if self.functions.contains_key(name) || self.structs.contains_key(name) {
-                        return Err(XeError::new(
-                            XeErrorKind::DuplicateFunction(name.clone()),
-                            Some(stmt.span.clone()),
-                        ));
-                    }
+                    self.check_new_definition(name, &stmt.span)?;
                     check_unique_names(fields, &stmt.span)?;
                     self.structs.insert(name.clone(), fields.clone());
-                    self.functions.insert(name.clone(), FunctionSignature {
-                        params: Some(vec![XeType::Unknown; fields.len()]),
+                    self.functions.insert(name.clone(), FunctionInfo {
+                        params: vec![XeType::Unknown; fields.len()],
                         return_type: XeType::Struct(name.clone()),
                     });
                 }
-                StatementKind::Assignment { name, .. } => {
-                    self.declare_global_placeholder(name, &stmt.span);
+                _ => {
+                    let mut targets = Vec::new();
+                    collect_top_level_targets(stmt, &mut targets);
+                    for name in targets {
+                        self.declare_global_placeholder(&name, &stmt.span);
+                    }
                 }
-                _ => {}
             }
         }
 
@@ -210,14 +145,27 @@ impl SemanticAnalyzer {
         })
     }
 
+    fn check_new_definition(&self, name: &str, span: &Span) -> XeResult<()> {
+        if self.functions.contains_key(name) || self.structs.contains_key(name) {
+            return Err(XeError::new(
+                XeErrorKind::DuplicateFunction(name.to_string()),
+                Some(span.clone()),
+            ));
+        }
+        Ok(())
+    }
+
+    fn analyze_statements(&mut self, statements: &[Statement]) -> XeResult<Vec<TypedStatement>> {
+        statements.iter().map(|s| self.analyze_statement(s)).collect()
+    }
+
     fn analyze_statement(&mut self, stmt: &Statement) -> XeResult<TypedStatement> {
         let kind = match &stmt.kind {
-            StatementKind::Import { .. } | StatementKind::FromImport { .. } => {
-                // Imports are handled during linking
+            StatementKind::Import { .. } | StatementKind::FromImport { .. } | StatementKind::Pass => {
                 TypedStatementKind::Nop
             }
             StatementKind::Global { names } => {
-                if self.function_depth == 0 {
+                if self.function.is_none() {
                     return Err(XeError::new(
                         XeErrorKind::GlobalOutsideFunction,
                         Some(stmt.span.clone()),
@@ -241,53 +189,36 @@ impl SemanticAnalyzer {
                 then_block,
                 else_block,
             } => {
-                let typed_cond = self.analyze_condition(condition)?;
-                let typed_then = self.analyze_block(then_block)?;
-                let typed_else = match else_block {
-                    Some(else_stmts) => Some(self.analyze_block(else_stmts)?),
+                let condition = self.analyze_condition(condition)?;
+                let before = self.flow();
+                let then_block = self.analyze_statements(then_block)?;
+                let after_then = self.flow();
+                self.set_flow(before);
+                let else_block = match else_block {
+                    Some(block) => Some(self.analyze_statements(block)?),
                     None => None,
                 };
+                let after_else = self.flow();
+                self.set_flow(meet(after_then, after_else));
 
                 TypedStatementKind::If {
-                    condition: typed_cond,
-                    then_block: typed_then,
-                    else_block: typed_else,
+                    condition,
+                    then_block,
+                    else_block,
                 }
             }
             StatementKind::While { condition, body } => {
-                let typed_cond = self.analyze_condition(condition)?;
-                self.loop_depth += 1;
-                let typed_body = self.analyze_block(body);
-                self.loop_depth -= 1;
-
-                TypedStatementKind::While {
-                    condition: typed_cond,
-                    body: typed_body?,
-                }
+                let condition = self.analyze_condition(condition)?;
+                let body = self.analyze_loop_body(body, None)?;
+                TypedStatementKind::While { condition, body }
             }
             StatementKind::Repeat { count, body } => {
-                let mut typed_count = self.analyze_expression(count)?;
-                if !typed_count.ty.is_compatible(&XeType::Number) {
-                    return Err(XeError::new(
-                        XeErrorKind::TypeMismatch {
-                            expected: "number".to_string(),
-                            got: typed_count.ty.name(),
-                        },
-                        Some(count.span.clone()),
-                    ));
-                }
-                if typed_count.ty != XeType::Number {
-                    typed_count = self.unwrap_to(typed_count, XeType::Number);
-                }
-
-                self.loop_depth += 1;
-                let typed_body = self.analyze_block(body);
-                self.loop_depth -= 1;
-
-                TypedStatementKind::Repeat {
-                    count: typed_count,
-                    body: typed_body?,
-                }
+                let count = self.analyze_expression(count)?;
+                let count = self
+                    .coerce(count, &XeType::Number)
+                    .map_err(|got| type_mismatch("number", got, &stmt.span))?;
+                let body = self.analyze_loop_body(body, None)?;
+                TypedStatementKind::Repeat { count, body }
             }
             StatementKind::For {
                 variable,
@@ -295,123 +226,82 @@ impl SemanticAnalyzer {
                 body,
             } => {
                 let typed_iter = self.analyze_expression(iterable)?;
-                let elem_ty = match &typed_iter.ty {
-                    XeType::List(inner) => *inner.clone(),
-                    XeType::Text => XeType::Text,
-                    XeType::Map => XeType::Text,
-                    XeType::Struct(_) => XeType::Text,
-                    XeType::Unknown => XeType::Unknown,
-                    _ => {
+                let is_range = matches!(
+                    typed_iter.kind,
+                    TypedExpressionKind::BuiltinCall {
+                        builtin: Builtin::Range,
+                        ..
+                    }
+                );
+                let variable_type = match &typed_iter.ty {
+                    _ if is_range => XeType::Number,
+                    XeType::Text | XeType::Struct(_) => XeType::Text,
+                    XeType::List | XeType::Map | XeType::Unknown => XeType::Unknown,
+                    other => {
                         return Err(XeError::new(
                             XeErrorKind::TypeMismatch {
                                 expected: "list, text, or map".to_string(),
-                                got: typed_iter.ty.name(),
+                                got: other.name(),
                             },
                             Some(iterable.span.clone()),
                         ));
                     }
                 };
-
-                self.loop_depth += 1;
-                self.push_scope();
-                self.define_variable(variable, elem_ty, &stmt.span);
-                let typed_body = body
-                    .iter()
-                    .map(|s| self.analyze_statement(s))
-                    .collect::<XeResult<Vec<_>>>();
-                self.pop_scope();
-                self.loop_depth -= 1;
+                let body = self.analyze_loop_body(
+                    body,
+                    Some((variable.clone(), variable_type.clone(), stmt.span.clone())),
+                )?;
 
                 TypedStatementKind::For {
                     variable: variable.clone(),
+                    variable_type,
                     iterable: typed_iter,
-                    body: typed_body?,
+                    body,
                 }
             }
-            StatementKind::FunctionDef {
-                name,
-                params,
-                body,
-            } => {
-                check_unique_names(params, &stmt.span)?;
-
-                self.function_depth += 1;
-                let saved_scopes = std::mem::replace(&mut self.scopes, vec![HashMap::new()]);
-                let saved_loop_depth = std::mem::replace(&mut self.loop_depth, 0);
-                let saved_return_info = self.return_info.replace(ReturnInfo::default());
-
-                let mut typed_params = Vec::new();
-                for param in params {
-                    self.define_variable(param, XeType::Unknown, &stmt.span);
-                    typed_params.push((param.clone(), XeType::Unknown));
-                }
-
-                let typed_body = body
-                    .iter()
-                    .map(|s| self.analyze_statement(s))
-                    .collect::<XeResult<Vec<_>>>();
-
-                let return_info = self.return_info.take().unwrap_or_default();
-                self.scopes = saved_scopes;
-                self.loop_depth = saved_loop_depth;
-                self.return_info = saved_return_info;
-                self.function_depth -= 1;
-                let typed_body = typed_body?;
-
-                let return_type = infer_return_type(&return_info, block_always_returns(body));
-                if let Some(sig) = self.functions.get_mut(name) {
-                    sig.return_type = return_type.clone();
-                }
-
-                TypedStatementKind::FunctionDef {
-                    name: name.clone(),
-                    params: typed_params,
-                    body: typed_body,
-                    return_type,
-                }
+            StatementKind::FunctionDef { name, params, body } => {
+                self.analyze_function(name, params, body, &stmt.span)?
             }
+            StatementKind::StructDef { name, fields } => TypedStatementKind::StructDef {
+                name: name.clone(),
+                fields: fields.clone(),
+            },
             StatementKind::Return { value } => {
-                if self.function_depth == 0 {
+                if self.function.is_none() {
                     return Err(XeError::new(
                         XeErrorKind::ReturnOutsideFunction,
                         Some(stmt.span.clone()),
                     ));
                 }
                 let typed_value = match value {
-                    Some(expr) => {
-                        let v = self.analyze_expression(expr)?;
-                        if let Some(info) = &mut self.return_info {
-                            info.value_types.push(v.ty.clone());
-                        }
-                        Some(v)
-                    }
-                    None => {
-                        if let Some(info) = &mut self.return_info {
-                            info.has_bare_return = true;
-                        }
-                        None
-                    }
+                    Some(expr) => Some(self.analyze_expression(expr)?),
+                    None => None,
                 };
-
+                if let Some(function) = &mut self.function {
+                    match &typed_value {
+                        Some(v) => function.returns.value_types.push(v.ty.clone()),
+                        None => function.returns.has_bare_return = true,
+                    }
+                }
+                self.set_flow(None);
                 TypedStatementKind::Return { value: typed_value }
             }
-            StatementKind::Break => {
+            StatementKind::Break | StatementKind::Continue => {
+                let is_break = matches!(stmt.kind, StatementKind::Break);
                 if self.loop_depth == 0 {
-                    return Err(XeError::new(
-                        XeErrorKind::BreakOutsideLoop,
-                        Some(stmt.span.clone()),
-                    ));
+                    let kind = if is_break {
+                        XeErrorKind::BreakOutsideLoop
+                    } else {
+                        XeErrorKind::ContinueOutsideLoop
+                    };
+                    return Err(XeError::new(kind, Some(stmt.span.clone())));
                 }
-                TypedStatementKind::Break
-            }
-            StatementKind::Continue => {
-                if self.loop_depth == 0 {
-                    return Err(XeError::new(
-                        XeErrorKind::ContinueOutsideLoop,
-                        Some(stmt.span.clone()),
-                    ));
+                self.set_flow(None);
+                if is_break {
+                    TypedStatementKind::Break
+                } else {
+                    TypedStatementKind::Continue
                 }
-                TypedStatementKind::Continue
             }
             StatementKind::Expression(expr) => {
                 let typed = self.analyze_expression(expr)?;
@@ -422,32 +312,22 @@ impl SemanticAnalyzer {
                 };
                 TypedStatementKind::Expression(typed)
             }
-            StatementKind::StructDef { name, fields } => {
-                TypedStatementKind::StructDef {
-                    name: name.clone(),
-                    fields: fields.clone(),
-                }
-            }
-            StatementKind::IndexAssignment { object, index, value } => {
-                check_assignment_root(object)?;
+            StatementKind::IndexAssignment {
+                object,
+                index,
+                value,
+                op,
+            } => {
+                let typed_value = self.analyze_expression(value)?;
                 let typed_object = self.analyze_expression(object)?;
                 let typed_index = self.analyze_expression(index)?;
-                let typed_value = self.analyze_expression(value)?;
-
-                let (typed_index, typed_value) = match &typed_object.ty {
-                    XeType::List(inner) => {
-                        let typed_index = self
-                            .coerce(typed_index, &XeType::Number)
-                            .map_err(|got| type_mismatch("number", got, &index.span))?;
-                        let typed_value = self
-                            .coerce(typed_value, inner)
-                            .map_err(|got| type_mismatch(&inner.name(), got, &value.span))?;
-                        (typed_index, typed_value)
+                match &typed_object.ty {
+                    XeType::List => {
+                        if !typed_index.ty.is_compatible(&XeType::Number) {
+                            return Err(type_mismatch("number", typed_index.ty, &index.span));
+                        }
                     }
-                    ty if ty.is_dynamic() => (
-                        self.coerce_to_dynamic(typed_index),
-                        self.coerce_to_dynamic(typed_value),
-                    ),
+                    XeType::Map | XeType::Struct(_) | XeType::Unknown => {}
                     ty => {
                         return Err(XeError::new(
                             XeErrorKind::InvalidAssignmentTarget(format!(
@@ -457,47 +337,55 @@ impl SemanticAnalyzer {
                             Some(stmt.span.clone()),
                         ));
                     }
-                };
-
+                }
                 TypedStatementKind::IndexAssignment {
                     object: typed_object,
-                    index: typed_index,
-                    value: typed_value,
+                    index: self.coerce_to_dynamic(typed_index),
+                    value: self.coerce_to_dynamic(typed_value),
+                    op: *op,
                 }
             }
-            StatementKind::FieldAssignment { object, field, value } => {
-                check_assignment_root(object)?;
-                let typed_object = self.analyze_expression(object)?;
-                match &typed_object.ty {
-                    XeType::Struct(struct_name) => {
-                        let has_field = self
-                            .structs
-                            .get(struct_name)
-                            .map(|fields| fields.contains(field))
-                            .unwrap_or(true);
-                        if !has_field {
-                            return Err(XeError::new(
-                                XeErrorKind::UndefinedVariable(format!("{}.{}", struct_name, field)),
-                                Some(stmt.span.clone()),
-                            ));
-                        }
-                    }
-                    XeType::Map | XeType::Unknown => {}
-                    ty => {
-                        return Err(XeError::new(
-                            XeErrorKind::InvalidAssignmentTarget(format!(
-                                "cannot assign field '{}' on a {} value",
-                                field, ty
-                            )),
-                            Some(stmt.span.clone()),
-                        ));
-                    }
-                }
+            StatementKind::FieldAssignment {
+                object,
+                field,
+                value,
+                op,
+            } => {
                 let typed_value = self.analyze_expression(value)?;
+                let typed_object = self.analyze_expression(object)?;
+                self.check_field_access(&typed_object, field, &stmt.span, true)?;
                 TypedStatementKind::FieldAssignment {
                     object: typed_object,
                     field: field.clone(),
                     value: self.coerce_to_dynamic(typed_value),
+                    op: *op,
+                }
+            }
+            StatementKind::Try {
+                body,
+                catch_variable,
+                handler,
+            } => {
+                let before = self.flow();
+                let body = self.analyze_statements(body)?;
+                let after_body = self.flow();
+                // The handler can start after any statement of the body has failed.
+                self.set_flow(before);
+                if let Some(name) = catch_variable {
+                    let message = TypedExpression {
+                        kind: TypedExpressionKind::String(String::new()),
+                        ty: XeType::Text,
+                        span: stmt.span.clone(),
+                    };
+                    self.assign_variable(name, message, &stmt.span)?;
+                }
+                let handler = self.analyze_statements(handler)?;
+                let after_handler = self.flow();
+                self.set_flow(meet(after_body, after_handler));
+                TypedStatementKind::Try {
+                    body,
+                    catch_variable: catch_variable.clone(),
+                    handler,
                 }
             }
         };
@@ -508,31 +396,180 @@ impl SemanticAnalyzer {
         })
     }
 
-    fn analyze_condition(&mut self, condition: &Expression) -> XeResult<TypedExpression> {
-        let typed_cond = self.analyze_expression(condition)?;
-        if !typed_cond.ty.is_compatible(&XeType::Boolean) {
-            return Err(XeError::new(
-                XeErrorKind::TypeMismatch {
-                    expected: "boolean".to_string(),
-                    got: typed_cond.ty.name(),
-                },
-                Some(condition.span.clone()),
-            ));
+    /// Analyzes a loop body. Assignments inside it are not definite after the loop,
+    /// since the body may run zero times.
+    fn analyze_loop_body(
+        &mut self,
+        body: &[Statement],
+        variable: Option<(String, XeType, Span)>,
+    ) -> XeResult<Vec<TypedStatement>> {
+        let before = self.flow();
+        self.loop_depth += 1;
+        let has_variable = variable.is_some();
+        if let Some((name, ty, span)) = variable {
+            let mut vars = HashMap::new();
+            vars.insert(name, SymbolInfo {
+                ty,
+                defined_at: span,
+                declared: true,
+            });
+            self.scopes.push(Scope {
+                kind: ScopeKind::Loop,
+                vars,
+            });
         }
-        if typed_cond.ty != XeType::Boolean {
-            return Ok(self.unwrap_to(typed_cond, XeType::Boolean));
+        let typed = self.analyze_statements(body);
+        if has_variable {
+            self.scopes.pop();
         }
-        Ok(typed_cond)
+        self.loop_depth -= 1;
+        self.set_flow(before);
+        typed
     }
 
-    fn analyze_block(&mut self, statements: &[Statement]) -> XeResult<Vec<TypedStatement>> {
-        self.push_scope();
-        let typed = statements
-            .iter()
-            .map(|s| self.analyze_statement(s))
-            .collect::<XeResult<Vec<_>>>();
-        self.pop_scope();
-        typed
+    fn analyze_function(
+        &mut self,
+        name: &str,
+        params: &[String],
+        body: &[Statement],
+        span: &Span,
+    ) -> XeResult<TypedStatementKind> {
+        check_unique_names(params, span)?;
+        let param_types = self.functions[name].params.clone();
+
+        let mut vars = HashMap::new();
+        for (param, ty) in params.iter().zip(&param_types) {
+            vars.insert(param.clone(), SymbolInfo {
+                ty: ty.clone(),
+                defined_at: span.clone(),
+                declared: true,
+            });
+        }
+
+        let saved_scopes = std::mem::replace(
+            &mut self.scopes,
+            vec![Scope {
+                kind: ScopeKind::FunctionLocals,
+                vars,
+            }],
+        );
+        let saved_loop_depth = std::mem::replace(&mut self.loop_depth, 0);
+        let saved_lambdas = std::mem::take(&mut self.lambdas);
+        let saved_function = self.function.replace(FunctionState {
+            returns: ReturnInfo::default(),
+            locals: Vec::new(),
+            assigned: Some(params.iter().cloned().collect()),
+        });
+
+        let typed_body = self.analyze_statements(body);
+
+        let state = self.function.take().expect("function state is set");
+        self.function = saved_function;
+        self.lambdas = saved_lambdas;
+        self.loop_depth = saved_loop_depth;
+        self.scopes = saved_scopes;
+        let typed_body = typed_body?;
+
+        let always_returns = block_always_returns(body);
+        let return_type = infer_return_type(&state.returns, always_returns);
+        if let Some(info) = self.functions.get_mut(name) {
+            info.return_type = return_type.clone();
+        }
+
+        Ok(TypedStatementKind::FunctionDef {
+            name: name.to_string(),
+            params: params.iter().cloned().zip(param_types).collect(),
+            locals: state.locals,
+            body: typed_body,
+            return_type,
+        })
+    }
+
+    fn analyze_condition(&mut self, condition: &Expression) -> XeResult<TypedExpression> {
+        let typed = self.analyze_expression(condition)?;
+        Ok(self.truthy(typed))
+    }
+
+    /// Any value can be used as a condition; non-booleans use their truthiness.
+    fn truthy(&self, typed: TypedExpression) -> TypedExpression {
+        if typed.ty == XeType::Boolean {
+            return typed;
+        }
+        TypedExpression {
+            ty: XeType::Boolean,
+            span: typed.span.clone(),
+            kind: TypedExpressionKind::Truthy(Box::new(typed)),
+        }
+    }
+
+    // --- Definite assignment of function locals ---
+
+    fn flow(&self) -> Option<HashSet<String>> {
+        self.function.as_ref().and_then(|f| f.assigned.clone())
+    }
+
+    fn set_flow(&mut self, state: Option<HashSet<String>>) {
+        if let Some(function) = &mut self.function {
+            function.assigned = state;
+        }
+    }
+
+    fn mark_assigned(&mut self, name: &str) {
+        if let Some(function) = &mut self.function {
+            if let Some(assigned) = &mut function.assigned {
+                assigned.insert(name.to_string());
+            }
+        }
+    }
+
+    fn is_definitely_assigned(&self, name: &str) -> bool {
+        match &self.function {
+            Some(function) => match &function.assigned {
+                Some(assigned) => assigned.contains(name),
+                None => true, // unreachable code
+            },
+            None => true,
+        }
+    }
+
+    // --- Variables ---
+
+    fn find_variable(&self, name: &str) -> Option<(VarLocation, SymbolInfo)> {
+        for (index, scope) in self.scopes.iter().enumerate().rev() {
+            if let Some(info) = scope.vars.get(name) {
+                return Some((VarLocation::Local(index), info.clone()));
+            }
+        }
+        self.globals
+            .get(name)
+            .map(|info| (VarLocation::Global, info.clone()))
+    }
+
+    /// Resolves a variable read, recording lambda captures and checking that function
+    /// locals are definitely assigned.
+    fn read_variable(&mut self, name: &str, span: &Span) -> XeResult<Option<XeType>> {
+        let Some((location, info)) = self.find_variable(name) else {
+            return Ok(None);
+        };
+        match location {
+            VarLocation::Global => Ok(Some(if info.declared { info.ty } else { XeType::Unknown })),
+            VarLocation::Local(index) => {
+                if self.scopes[index].kind == ScopeKind::FunctionLocals
+                    && !self.is_definitely_assigned(name)
+                {
+                    return Err(XeError::new(
+                        XeErrorKind::MaybeUnassigned(name.to_string()),
+                        Some(span.clone()),
+                    ));
+                }
+                for frame in &mut self.lambdas {
+                    if index < frame.scope_index && !frame.captures.iter().any(|(n, _)| n == name) {
+                        frame.captures.push((name.to_string(), info.ty.clone()));
+                    }
+                }
+                Ok(Some(info.ty))
+            }
+        }
     }
 
     /// Assigns to a variable. The first assignment declares the variable and fixes its
@@ -543,41 +580,49 @@ impl SemanticAnalyzer {
         value: TypedExpression,
         span: &Span,
     ) -> XeResult<TypedExpression> {
-        let existing = self
-            .scopes
-            .iter()
-            .rev()
-            .find_map(|scope| scope.get(name))
-            .or_else(|| self.globals.get(name))
-            .cloned();
+        let value = match value.ty {
+            XeType::Void => self.wrap_to_unknown(value),
+            _ => value,
+        };
 
-        match existing {
-            Some(info) if info.declared => self.coerce(value, &info.ty).map_err(|got| {
-                XeError::new(
-                    XeErrorKind::TypeMismatch {
-                        expected: format!("{} (defined at line {})", info.ty, info.defined_at.line),
-                        got: got.name(),
-                    },
-                    Some(span.clone()),
-                )
-            }),
-            Some(_) => {
+        match self.find_variable(name) {
+            Some((location, info)) if info.declared => {
+                let coerced = self.coerce(value, &info.ty).map_err(|got| {
+                    XeError::new(
+                        XeErrorKind::TypeMismatch {
+                            expected: format!("{} (defined at line {})", info.ty, info.defined_at.line),
+                            got: got.name(),
+                        },
+                        Some(span.clone()),
+                    )
+                })?;
+                if let VarLocation::Local(index) = location {
+                    if self.scopes[index].kind == ScopeKind::FunctionLocals {
+                        self.mark_assigned(name);
+                    }
+                }
+                Ok(coerced)
+            }
+            Some((VarLocation::Global, _)) => {
                 // First assignment of a known module-level variable.
-                let global = self.globals.get_mut(name).expect("undeclared symbols are globals");
+                let global = self.globals.get_mut(name).expect("found above");
                 global.ty = value.ty.clone();
                 global.declared = true;
                 global.defined_at = span.clone();
                 Ok(value)
             }
+            Some((VarLocation::Local(_), _)) => unreachable!("locals are always declared"),
             None => {
                 let info = SymbolInfo {
                     ty: value.ty.clone(),
                     defined_at: span.clone(),
                     declared: true,
                 };
-                match self.scopes.last_mut() {
-                    Some(scope) => {
-                        scope.insert(name.to_string(), info);
+                match &mut self.function {
+                    Some(function) => {
+                        function.locals.push((name.to_string(), value.ty.clone()));
+                        self.scopes[0].vars.insert(name.to_string(), info);
+                        self.mark_assigned(name);
                     }
                     None => {
                         self.global_order.push(name.to_string());
@@ -587,6 +632,495 @@ impl SemanticAnalyzer {
                 Ok(value)
             }
         }
+    }
+
+    fn declare_global_placeholder(&mut self, name: &str, span: &Span) {
+        if !self.globals.contains_key(name) {
+            self.global_order.push(name.to_string());
+            self.globals.insert(name.to_string(), SymbolInfo {
+                ty: XeType::Unknown,
+                defined_at: span.clone(),
+                declared: false,
+            });
+        }
+    }
+
+    // --- Expressions ---
+
+    fn analyze_expression(&mut self, expr: &Expression) -> XeResult<TypedExpression> {
+        let span = expr.span.clone();
+        let (kind, ty) = match &expr.kind {
+            ExpressionKind::Number(n) => (TypedExpressionKind::Number(*n), XeType::Number),
+            ExpressionKind::String(s) => (TypedExpressionKind::String(s.clone()), XeType::Text),
+            ExpressionKind::Boolean(b) => (TypedExpressionKind::Boolean(*b), XeType::Boolean),
+            ExpressionKind::None => (TypedExpressionKind::None, XeType::Unknown),
+
+            ExpressionKind::Identifier(name) => {
+                if let Some(ty) = self.read_variable(name, &span)? {
+                    (TypedExpressionKind::Identifier(name.clone()), ty)
+                } else if self.functions.contains_key(name) {
+                    (TypedExpressionKind::FunctionRef(name.clone()), XeType::Function)
+                } else if let Some(builtin) = Builtin::from_name(name) {
+                    (TypedExpressionKind::BuiltinRef(builtin), XeType::Function)
+                } else {
+                    return Err(XeError::new(
+                        XeErrorKind::UndefinedVariable(name.clone()),
+                        Some(span),
+                    ));
+                }
+            }
+
+            ExpressionKind::List(elements) => {
+                let elements = elements
+                    .iter()
+                    .map(|e| {
+                        let typed = self.analyze_expression(e)?;
+                        Ok(self.coerce_to_dynamic(typed))
+                    })
+                    .collect::<XeResult<Vec<_>>>()?;
+                (TypedExpressionKind::List(elements), XeType::List)
+            }
+
+            ExpressionKind::Map(entries) => {
+                let entries = entries
+                    .iter()
+                    .map(|(k, v)| {
+                        let k = self.analyze_expression(k)?;
+                        let v = self.analyze_expression(v)?;
+                        Ok((self.coerce_to_dynamic(k), self.coerce_to_dynamic(v)))
+                    })
+                    .collect::<XeResult<Vec<_>>>()?;
+                (TypedExpressionKind::Map(entries), XeType::Map)
+            }
+
+            ExpressionKind::BinaryOp { left, op, right } => {
+                let l = self.analyze_expression(left)?;
+                let r = self.analyze_expression(right)?;
+                self.binary_op(l, *op, r, &span)?
+            }
+
+            ExpressionKind::UnaryOp { op, operand } => {
+                let o = self.analyze_expression(operand)?;
+                match op {
+                    UnaryOperator::Negate => {
+                        let o = self
+                            .coerce(o, &XeType::Number)
+                            .map_err(|got| type_mismatch("number", got, &span))?;
+                        (
+                            TypedExpressionKind::UnaryOp {
+                                op: *op,
+                                operand: Box::new(o),
+                            },
+                            XeType::Number,
+                        )
+                    }
+                    UnaryOperator::Not => (
+                        TypedExpressionKind::UnaryOp {
+                            op: *op,
+                            operand: Box::new(self.truthy(o)),
+                        },
+                        XeType::Boolean,
+                    ),
+                }
+            }
+
+            ExpressionKind::FunctionCall { name, args } => {
+                if self.find_variable(name).is_some() {
+                    let callee = self.analyze_expression(&Expression {
+                        kind: ExpressionKind::Identifier(name.clone()),
+                        span: span.clone(),
+                    })?;
+                    self.dynamic_call(callee, args, &format!("'{}'", name))?
+                } else {
+                    self.named_call(name, None, args, &span)?
+                }
+            }
+
+            ExpressionKind::MethodCall {
+                object,
+                method,
+                args,
+            } => {
+                if self.functions.contains_key(method) || Builtin::is_builtin(method) {
+                    // `object.method(args)` is `method(object, args)`.
+                    self.named_call(method, Some(object), args, &span)?
+                } else {
+                    let callee = self.analyze_expression(&Expression {
+                        kind: ExpressionKind::FieldAccess {
+                            object: object.clone(),
+                            field: method.clone(),
+                        },
+                        span: span.clone(),
+                    })?;
+                    self.dynamic_call(callee, args, &format!("'{}'", method))?
+                }
+            }
+
+            ExpressionKind::Call { callee, args } => {
+                let callee = self.analyze_expression(callee)?;
+                self.dynamic_call(callee, args, "this value")?
+            }
+
+            ExpressionKind::Lambda { params, body } => {
+                check_unique_names(params, &span)?;
+                let vars = params
+                    .iter()
+                    .map(|p| {
+                        (p.clone(), SymbolInfo {
+                            ty: XeType::Unknown,
+                            defined_at: span.clone(),
+                            declared: true,
+                        })
+                    })
+                    .collect();
+                self.scopes.push(Scope {
+                    kind: ScopeKind::Lambda,
+                    vars,
+                });
+                self.lambdas.push(LambdaFrame {
+                    scope_index: self.scopes.len() - 1,
+                    captures: Vec::new(),
+                });
+                let body = self.analyze_expression(body);
+                let frame = self.lambdas.pop().expect("pushed above");
+                self.scopes.pop();
+                let body = self.coerce_to_dynamic(body?);
+                (
+                    TypedExpressionKind::Lambda {
+                        params: params.clone(),
+                        captures: frame.captures,
+                        body: Box::new(body),
+                    },
+                    XeType::Function,
+                )
+            }
+
+            ExpressionKind::Index { object, index } => {
+                let obj = self.analyze_expression(object)?;
+                let idx = self.analyze_expression(index)?;
+                let ty = match &obj.ty {
+                    XeType::Text => XeType::Text,
+                    XeType::List | XeType::Map | XeType::Struct(_) | XeType::Unknown => XeType::Unknown,
+                    other => {
+                        return Err(type_mismatch("list, text, or map", other.clone(), &object.span));
+                    }
+                };
+                if matches!(obj.ty, XeType::Text | XeType::List) && !idx.ty.is_compatible(&XeType::Number) {
+                    return Err(type_mismatch("number", idx.ty, &index.span));
+                }
+                (
+                    TypedExpressionKind::Index {
+                        object: Box::new(obj),
+                        index: Box::new(self.coerce_to_dynamic(idx)),
+                    },
+                    ty,
+                )
+            }
+
+            ExpressionKind::Slice { object, start, end } => {
+                let obj = self.analyze_expression(object)?;
+                let ty = match &obj.ty {
+                    XeType::Text | XeType::List | XeType::Unknown => obj.ty.clone(),
+                    other => return Err(type_mismatch("list or text", other.clone(), &object.span)),
+                };
+                let start = self.slice_bound(start)?;
+                let end = self.slice_bound(end)?;
+                (
+                    TypedExpressionKind::Slice {
+                        object: Box::new(obj),
+                        start,
+                        end,
+                    },
+                    ty,
+                )
+            }
+
+            ExpressionKind::FieldAccess { object, field } => {
+                let obj = self.analyze_expression(object)?;
+                self.check_field_access(&obj, field, &expr.span, false)?;
+                (
+                    TypedExpressionKind::FieldAccess {
+                        object: Box::new(obj),
+                        field: field.clone(),
+                    },
+                    XeType::Unknown,
+                )
+            }
+        };
+
+        let typed = TypedExpression { kind, ty, span };
+        if typed.ty == XeType::Void {
+            // A call to a function without a return value evaluates to `none`.
+            return Ok(self.wrap_to_unknown(typed));
+        }
+        Ok(typed)
+    }
+
+    fn slice_bound(&mut self, bound: &Option<Box<Expression>>) -> XeResult<Option<Box<TypedExpression>>> {
+        let Some(bound) = bound else {
+            return Ok(None);
+        };
+        let typed = self.analyze_expression(bound)?;
+        let typed = self
+            .coerce(typed, &XeType::Number)
+            .map_err(|got| type_mismatch("number", got, &bound.span))?;
+        Ok(Some(Box::new(typed)))
+    }
+
+    fn check_field_access(
+        &self,
+        object: &TypedExpression,
+        field: &str,
+        span: &Span,
+        is_assignment: bool,
+    ) -> XeResult<()> {
+        match &object.ty {
+            XeType::Struct(struct_name) => {
+                let has_field = self
+                    .structs
+                    .get(struct_name)
+                    .map(|fields| fields.iter().any(|f| f == field))
+                    .unwrap_or(true);
+                if has_field {
+                    Ok(())
+                } else {
+                    Err(XeError::new(
+                        XeErrorKind::UndefinedVariable(format!("{}.{}", struct_name, field)),
+                        Some(span.clone()),
+                    ))
+                }
+            }
+            XeType::Map | XeType::Unknown => Ok(()),
+            ty => {
+                let message = if is_assignment {
+                    format!("cannot assign field '{}' on a {} value", field, ty)
+                } else {
+                    format!("cannot access field '{}' on a {} value", field, ty)
+                };
+                Err(XeError::new(
+                    XeErrorKind::InvalidAssignmentTarget(message),
+                    Some(span.clone()),
+                ))
+            }
+        }
+    }
+
+    fn binary_op(
+        &self,
+        l: TypedExpression,
+        op: BinaryOperator,
+        r: TypedExpression,
+        span: &Span,
+    ) -> XeResult<(TypedExpressionKind, XeType)> {
+        use XeType::{Boolean, List, Number, Text, Unknown};
+        let mismatch = |l: &XeType, r: &XeType| {
+            Err(XeError::new(
+                XeErrorKind::InvalidOperation(format!(
+                    "operator '{}' is not defined for {} and {}",
+                    op.symbol(),
+                    l,
+                    r
+                )),
+                Some(span.clone()),
+            ))
+        };
+        let node = |l: TypedExpression, r: TypedExpression| TypedExpressionKind::BinaryOp {
+            left: Box::new(l),
+            op,
+            right: Box::new(r),
+        };
+
+        Ok(match op {
+            BinaryOperator::Add => match (&l.ty, &r.ty) {
+                (Number, Number) => (node(l, r), Number),
+                (Text, Text) => (node(l, r), Text),
+                // Text joined with any other value converts that value to text.
+                (Text, _) | (_, Text) => (
+                    node(self.coerce_to_dynamic(l), self.coerce_to_dynamic(r)),
+                    Text,
+                ),
+                (List, List) => (node(l, r), List),
+                (Unknown, Number | List | Unknown) | (Number | List, Unknown) => (
+                    node(self.coerce_to_dynamic(l), self.coerce_to_dynamic(r)),
+                    Unknown,
+                ),
+                (lt, rt) => return mismatch(lt, rt),
+            },
+            BinaryOperator::Subtract
+            | BinaryOperator::Multiply
+            | BinaryOperator::Divide
+            | BinaryOperator::FloorDivide
+            | BinaryOperator::Modulo
+            | BinaryOperator::Power => {
+                if !l.ty.is_compatible(&Number) || !r.ty.is_compatible(&Number) {
+                    return mismatch(&l.ty, &r.ty);
+                }
+                let l = self.coerce(l, &Number).unwrap_or_else(|_| unreachable!());
+                let r = self.coerce(r, &Number).unwrap_or_else(|_| unreachable!());
+                (node(l, r), Number)
+            }
+            BinaryOperator::Less
+            | BinaryOperator::Greater
+            | BinaryOperator::LessEqual
+            | BinaryOperator::GreaterEqual => {
+                let target = match (&l.ty, &r.ty) {
+                    (Number, Number | Unknown) | (Unknown, Number) => Number,
+                    (Text, Text | Unknown) | (Unknown, Text) => Text,
+                    (Unknown, Unknown) => Unknown,
+                    (lt, rt) => return mismatch(lt, rt),
+                };
+                let l = self.coerce(l, &target).unwrap_or_else(|_| unreachable!());
+                let r = self.coerce(r, &target).unwrap_or_else(|_| unreachable!());
+                (node(l, r), Boolean)
+            }
+            BinaryOperator::Equal | BinaryOperator::NotEqual => (node(l, r), Boolean),
+            BinaryOperator::In | BinaryOperator::NotIn => {
+                if !matches!(r.ty, List | Text | XeType::Map | XeType::Struct(_) | Unknown) {
+                    return mismatch(&l.ty, &r.ty);
+                }
+                (node(self.coerce_to_dynamic(l), self.coerce_to_dynamic(r)), Boolean)
+            }
+            BinaryOperator::And | BinaryOperator::Or => (node(self.truthy(l), self.truthy(r)), Boolean),
+        })
+    }
+
+    /// Calls `name(receiver?, args...)`: a user function, struct constructor, or builtin.
+    fn named_call(
+        &mut self,
+        name: &str,
+        receiver: Option<&Expression>,
+        args: &[Expression],
+        span: &Span,
+    ) -> XeResult<(TypedExpressionKind, XeType)> {
+        let all_args: Vec<&Expression> = receiver.into_iter().chain(args).collect();
+
+        if let Some(info) = self.functions.get(name) {
+            let param_types = info.params.clone();
+            let return_type = info.return_type.clone();
+            if all_args.len() != param_types.len() {
+                return Err(XeError::new(
+                    XeErrorKind::WrongArgumentCount {
+                        name: name.to_string(),
+                        expected: param_types.len(),
+                        got: all_args.len(),
+                    },
+                    Some(span.clone()),
+                ));
+            }
+            let mut typed_args = Vec::new();
+            for (arg, param_ty) in all_args.iter().zip(&param_types) {
+                let typed = self.analyze_expression(arg)?;
+                let typed = self
+                    .coerce(typed, param_ty)
+                    .map_err(|got| type_mismatch(&param_ty.name(), got, &arg.span))?;
+                typed_args.push(typed);
+            }
+            return Ok((
+                TypedExpressionKind::FunctionCall {
+                    name: name.to_string(),
+                    args: typed_args,
+                },
+                return_type,
+            ));
+        }
+
+        let Some(builtin) = Builtin::from_name(name) else {
+            return Err(XeError::new(
+                XeErrorKind::UndefinedFunction(name.to_string()),
+                Some(span.clone()),
+            ));
+        };
+        let signature = builtin.signature();
+        if !signature.accepts(all_args.len()) {
+            return Err(XeError::new(
+                XeErrorKind::InvalidOperation(format!(
+                    "function '{}' expects {} arguments, got {}",
+                    name,
+                    signature.describe_arity(),
+                    all_args.len()
+                )),
+                Some(span.clone()),
+            ));
+        }
+
+        let mut original_types = Vec::new();
+        let mut typed_args = Vec::new();
+        for (i, arg) in all_args.iter().enumerate() {
+            let typed = self.analyze_expression(arg)?;
+            original_types.push(typed.ty.clone());
+            let expected = signature.param_type(i);
+            if !typed.ty.is_compatible(&expected) {
+                return Err(type_mismatch(&expected.name(), typed.ty, &arg.span));
+            }
+            let typed = if expected.is_dynamic() {
+                self.coerce_to_dynamic(typed)
+            } else {
+                self.coerce(typed, &expected).unwrap_or_else(|_| unreachable!())
+            };
+            typed_args.push(typed);
+        }
+
+        let return_type = match builtin {
+            Builtin::Convert => match &all_args[1].kind {
+                ExpressionKind::String(target) => match target.as_str() {
+                    "number" => XeType::Number,
+                    "text" => XeType::Text,
+                    "boolean" => XeType::Boolean,
+                    other => {
+                        return Err(XeError::new(
+                            XeErrorKind::InvalidOperation(format!(
+                                "convert() target must be \"number\", \"text\" or \"boolean\", got \"{}\"",
+                                other
+                            )),
+                            Some(all_args[1].span.clone()),
+                        ));
+                    }
+                },
+                _ => XeType::Unknown,
+            },
+            Builtin::Min | Builtin::Max
+                if original_types.len() >= 2 && original_types.iter().all(|t| *t == XeType::Number) =>
+            {
+                XeType::Number
+            }
+            _ => signature.return_type,
+        };
+
+        Ok((
+            TypedExpressionKind::BuiltinCall {
+                builtin,
+                args: typed_args,
+            },
+            return_type,
+        ))
+    }
+
+    fn dynamic_call(
+        &mut self,
+        callee: TypedExpression,
+        args: &[Expression],
+        description: &str,
+    ) -> XeResult<(TypedExpressionKind, XeType)> {
+        if !callee.ty.is_compatible(&XeType::Function) {
+            return Err(XeError::new(
+                XeErrorKind::NotCallable(format!("{} (a {} value)", description, callee.ty)),
+                Some(callee.span.clone()),
+            ));
+        }
+        let args = args
+            .iter()
+            .map(|arg| {
+                let typed = self.analyze_expression(arg)?;
+                Ok(self.coerce_to_dynamic(typed))
+            })
+            .collect::<XeResult<Vec<_>>>()?;
+        Ok((
+            TypedExpressionKind::DynamicCall {
+                callee: Box::new(self.coerce_to_dynamic(callee)),
+                args,
+            },
+            XeType::Unknown,
+        ))
     }
 
     /// Converts `value` to `target`, or returns the value's type if the two are incompatible.
@@ -608,366 +1142,6 @@ impl SemanticAnalyzer {
         }
     }
 
-    /// Compile-time checks for `append(list, item)` and `pop(list)`.
-    fn check_list_mutation_args(
-        &self,
-        name: &str,
-        typed_args: &[TypedExpression],
-        args: &[Expression],
-    ) -> XeResult<()> {
-        let original_type = |arg: &TypedExpression| match &arg.kind {
-            TypedExpressionKind::Wrap(inner) => inner.ty.clone(),
-            _ => arg.ty.clone(),
-        };
-
-        let list_ty = original_type(&typed_args[0]);
-        match &list_ty {
-            XeType::List(inner) => {
-                if name == "append" {
-                    let item_ty = original_type(&typed_args[1]);
-                    if !item_ty.is_compatible(inner) {
-                        return Err(type_mismatch(&inner.name(), item_ty, &args[1].span));
-                    }
-                }
-                Ok(())
-            }
-            XeType::Unknown => Ok(()),
-            _ => Err(type_mismatch("list", list_ty, &args[0].span)),
-        }
-    }
-
-    fn analyze_expression(&mut self, expr: &Expression) -> XeResult<TypedExpression> {
-        let span = expr.span.clone();
-        let (kind, ty) = match &expr.kind {
-            ExpressionKind::Number(n) => (TypedExpressionKind::Number(*n), XeType::Number),
-            ExpressionKind::String(s) => (TypedExpressionKind::String(s.clone()), XeType::Text),
-            ExpressionKind::Boolean(b) => (TypedExpressionKind::Boolean(*b), XeType::Boolean),
-
-            ExpressionKind::Identifier(name) => {
-                if let Some(info) = self.get_symbol_info(name) {
-                    let ty = if info.declared { info.ty.clone() } else { XeType::Unknown };
-                    (TypedExpressionKind::Identifier(name.clone()), ty)
-                } else {
-                    return Err(XeError::new(
-                        XeErrorKind::UndefinedVariable(name.clone()),
-                        Some(expr.span.clone()),
-                    ));
-                }
-            }
-
-            ExpressionKind::List(elements) => {
-                let mut typed_elements = Vec::new();
-                let mut elem_ty: Option<XeType> = None;
-                let mut is_mixed = false;
-
-                for elem in elements {
-                    let typed_elem = self.analyze_expression(elem)?;
-                    match &elem_ty {
-                        None => {
-                            elem_ty = Some(typed_elem.ty.clone());
-                        }
-                        Some(prev_ty) => {
-                            if prev_ty != &typed_elem.ty || typed_elem.ty == XeType::Unknown {
-                                is_mixed = true;
-                            }
-                        }
-                    }
-                    typed_elements.push(typed_elem);
-                }
-
-                let final_elem_ty = match elem_ty {
-                    Some(ty) if !is_mixed => ty,
-                    _ => XeType::Unknown,
-                };
-
-                (
-                    TypedExpressionKind::List(typed_elements),
-                    XeType::List(Box::new(final_elem_ty)),
-                )
-            }
-
-            ExpressionKind::BinaryOp { left, op, right } => {
-                let mut l = self.analyze_expression(left)?;
-                let mut r = self.analyze_expression(right)?;
-
-                match op {
-                    BinaryOperator::Add => {
-                        if l.ty == XeType::Number && r.ty == XeType::Number {
-                            (TypedExpressionKind::BinaryOp { left: Box::new(l), op: *op, right: Box::new(r) }, XeType::Number)
-                        } else if l.ty == XeType::Text || r.ty == XeType::Text {
-                            if l.ty != XeType::Text { l = self.wrap_to_unknown(l); }
-                            if r.ty != XeType::Text { r = self.wrap_to_unknown(r); }
-                            (TypedExpressionKind::BinaryOp { left: Box::new(l), op: *op, right: Box::new(r) }, XeType::Text)
-                        } else if let (XeType::List(lt), XeType::List(rt)) = (&l.ty, &r.ty) {
-                            let res_ty = if lt.is_compatible(rt) { lt.clone() } else { Box::new(XeType::Unknown) };
-                            (TypedExpressionKind::BinaryOp { left: Box::new(l), op: *op, right: Box::new(r) }, XeType::List(res_ty))
-                        } else if l.ty == XeType::Unknown || r.ty == XeType::Unknown {
-                            (TypedExpressionKind::BinaryOp { left: Box::new(l), op: *op, right: Box::new(r) }, XeType::Unknown)
-                        } else {
-                            return Err(XeError::new(
-                                XeErrorKind::TypeMismatch {
-                                    expected: "number, text, or list".to_string(),
-                                    got: format!("{} and {}", l.ty, r.ty),
-                                },
-                                Some(expr.span.clone()),
-                            ));
-                        }
-                    }
-                    BinaryOperator::Subtract | BinaryOperator::Multiply | BinaryOperator::Divide | BinaryOperator::Modulo => {
-                        if l.ty.is_compatible(&XeType::Number) && r.ty.is_compatible(&XeType::Number) {
-                            if l.ty == XeType::Unknown { l = self.unwrap_to(l, XeType::Number); }
-                            if r.ty == XeType::Unknown { r = self.unwrap_to(r, XeType::Number); }
-                            (TypedExpressionKind::BinaryOp { left: Box::new(l), op: *op, right: Box::new(r) }, XeType::Number)
-                        } else {
-                            return Err(XeError::new(
-                                XeErrorKind::TypeMismatch {
-                                    expected: "number".to_string(),
-                                    got: format!("{} and {}", l.ty, r.ty),
-                                },
-                                Some(expr.span.clone()),
-                            ));
-                        }
-                    }
-                    BinaryOperator::Equal | BinaryOperator::NotEqual => {
-                        (TypedExpressionKind::BinaryOp { left: Box::new(l), op: *op, right: Box::new(r) }, XeType::Boolean)
-                    }
-                    BinaryOperator::Less | BinaryOperator::Greater | BinaryOperator::LessEqual | BinaryOperator::GreaterEqual => {
-                        if l.ty.is_compatible(&XeType::Number) && r.ty.is_compatible(&XeType::Number) {
-                            if l.ty == XeType::Unknown { l = self.unwrap_to(l, XeType::Number); }
-                            if r.ty == XeType::Unknown { r = self.unwrap_to(r, XeType::Number); }
-                            (TypedExpressionKind::BinaryOp { left: Box::new(l), op: *op, right: Box::new(r) }, XeType::Boolean)
-                        } else {
-                            return Err(XeError::new(
-                                XeErrorKind::TypeMismatch {
-                                    expected: "number".to_string(),
-                                    got: format!("{} and {}", l.ty, r.ty),
-                                },
-                                Some(expr.span.clone()),
-                            ));
-                        }
-                    }
-                    BinaryOperator::And | BinaryOperator::Or => {
-                        if l.ty.is_compatible(&XeType::Boolean) && r.ty.is_compatible(&XeType::Boolean) {
-                            if l.ty == XeType::Unknown { l = self.unwrap_to(l, XeType::Boolean); }
-                            if r.ty == XeType::Unknown { r = self.unwrap_to(r, XeType::Boolean); }
-                            (TypedExpressionKind::BinaryOp { left: Box::new(l), op: *op, right: Box::new(r) }, XeType::Boolean)
-                        } else {
-                            return Err(XeError::new(
-                                XeErrorKind::TypeMismatch {
-                                    expected: "boolean".to_string(),
-                                    got: format!("{} and {}", l.ty, r.ty),
-                                },
-                                Some(expr.span.clone()),
-                            ));
-                        }
-                    }
-                }
-            }
-
-            ExpressionKind::UnaryOp { op, operand } => {
-                let mut o = self.analyze_expression(operand)?;
-                match op {
-                    UnaryOperator::Negate => {
-                        if o.ty.is_compatible(&XeType::Number) {
-                            if o.ty == XeType::Unknown { o = self.unwrap_to(o, XeType::Number); }
-                            (TypedExpressionKind::UnaryOp { op: *op, operand: Box::new(o) }, XeType::Number)
-                        } else {
-                            return Err(XeError::new(
-                                XeErrorKind::TypeMismatch {
-                                    expected: "number".to_string(),
-                                    got: o.ty.name(),
-                                },
-                                Some(expr.span.clone()),
-                            ));
-                        }
-                    }
-                    UnaryOperator::Not => {
-                        if o.ty.is_compatible(&XeType::Boolean) {
-                            if o.ty == XeType::Unknown { o = self.unwrap_to(o, XeType::Boolean); }
-                            (TypedExpressionKind::UnaryOp { op: *op, operand: Box::new(o) }, XeType::Boolean)
-                        } else {
-                            return Err(XeError::new(
-                                XeErrorKind::TypeMismatch {
-                                    expected: "boolean".to_string(),
-                                    got: o.ty.name(),
-                                },
-                                Some(expr.span.clone()),
-                            ));
-                        }
-                    }
-                }
-            }
-
-            ExpressionKind::FunctionCall { name, args } => {
-                let sig = if let Some(sig) = self.functions.get(name) {
-                    sig.clone()
-                } else {
-                    return Err(XeError::new(
-                        XeErrorKind::UndefinedFunction(name.clone()),
-                        Some(expr.span.clone()),
-                    ));
-                };
-
-                let mut typed_args = Vec::new();
-                if let Some(expected_params) = &sig.params {
-                    if args.len() != expected_params.len() {
-                        return Err(XeError::new(
-                            XeErrorKind::WrongArgumentCount {
-                                name: name.clone(),
-                                expected: expected_params.len(),
-                                got: args.len(),
-                            },
-                            Some(expr.span.clone()),
-                        ));
-                    }
-                    
-                    for (i, arg) in args.iter().enumerate() {
-                        let mut arg_typed = self.analyze_expression(arg)?;
-                        let expected_ty = &expected_params[i];
-                        
-                        if !arg_typed.ty.is_compatible(expected_ty) {
-                             return Err(XeError::new(
-                                XeErrorKind::TypeMismatch {
-                                    expected: expected_ty.name(),
-                                    got: arg_typed.ty.name(),
-                                },
-                                Some(arg.span.clone()),
-                            ));
-                        }
-
-                        if *expected_ty == XeType::Unknown && arg_typed.ty != XeType::Unknown {
-                            arg_typed = self.wrap_to_unknown(arg_typed);
-                        } else if *expected_ty != XeType::Unknown && arg_typed.ty == XeType::Unknown {
-                            arg_typed = self.unwrap_to(arg_typed, expected_ty.clone());
-                        }
-
-                        typed_args.push(arg_typed);
-                    }
-                } else {
-                    for arg in args {
-                        let mut arg_typed = self.analyze_expression(arg)?;
-                        if arg_typed.ty != XeType::Unknown {
-                            arg_typed = self.wrap_to_unknown(arg_typed);
-                        }
-                        typed_args.push(arg_typed);
-                    }
-                }
-
-                if name == "append" || name == "pop" {
-                    self.check_list_mutation_args(name, &typed_args, args)?;
-                }
-
-                (TypedExpressionKind::FunctionCall { name: name.clone(), args: typed_args }, sig.return_type)
-            }
-
-            ExpressionKind::Index { object, index } => {
-                let obj_typed = self.analyze_expression(object)?;
-                let mut idx_typed = self.analyze_expression(index)?;
-
-                let ret_ty = match &obj_typed.ty {
-                    XeType::List(inner) => {
-                        if !idx_typed.ty.is_compatible(&XeType::Number) {
-                            return Err(XeError::new(
-                                XeErrorKind::TypeMismatch {
-                                    expected: "number".to_string(),
-                                    got: idx_typed.ty.name(),
-                                },
-                                Some(index.span.clone()),
-                            ));
-                        }
-                        if idx_typed.ty == XeType::Unknown {
-                            idx_typed = self.unwrap_to(idx_typed, XeType::Number);
-                        }
-                        *inner.clone()
-                    }
-                    XeType::Text => {
-                        if !idx_typed.ty.is_compatible(&XeType::Number) {
-                            return Err(XeError::new(
-                                XeErrorKind::TypeMismatch {
-                                    expected: "number".to_string(),
-                                    got: idx_typed.ty.name(),
-                                },
-                                Some(index.span.clone()),
-                            ));
-                        }
-                        if idx_typed.ty == XeType::Unknown {
-                            idx_typed = self.unwrap_to(idx_typed, XeType::Number);
-                        }
-                        XeType::Text
-                    }
-                    XeType::Map => {
-                        if idx_typed.ty != XeType::Unknown {
-                            idx_typed = self.wrap_to_unknown(idx_typed);
-                        }
-                        XeType::Unknown
-                    }
-                    XeType::Struct(_) => {
-                        if idx_typed.ty != XeType::Unknown {
-                            idx_typed = self.wrap_to_unknown(idx_typed);
-                        }
-                        XeType::Unknown
-                    }
-                    XeType::Unknown => {
-                        if idx_typed.ty != XeType::Unknown {
-                            idx_typed = self.wrap_to_unknown(idx_typed);
-                        }
-                        XeType::Unknown
-                    }
-                    _ => return Err(XeError::new(
-                        XeErrorKind::TypeMismatch {
-                            expected: "list, text, or map".to_string(),
-                            got: obj_typed.ty.name(),
-                        },
-                        Some(object.span.clone()),
-                    )),
-                };
-
-                (TypedExpressionKind::Index { object: Box::new(obj_typed), index: Box::new(idx_typed) }, ret_ty)
-            }
-
-            ExpressionKind::Map(entries) => {
-                let mut typed_entries = Vec::new();
-                for (k, v) in entries {
-                    let mut k_typed = self.analyze_expression(k)?;
-                    let mut v_typed = self.analyze_expression(v)?;
-                    if k_typed.ty != XeType::Unknown {
-                        k_typed = self.wrap_to_unknown(k_typed);
-                    }
-                    if v_typed.ty != XeType::Unknown {
-                        v_typed = self.wrap_to_unknown(v_typed);
-                    }
-                    typed_entries.push((k_typed, v_typed));
-                }
-                (TypedExpressionKind::Map(typed_entries), XeType::Map)
-            }
-
-            ExpressionKind::FieldAccess { object, field } => {
-                let obj_typed = self.analyze_expression(object)?;
-                if let XeType::Struct(struct_name) = &obj_typed.ty {
-                    if let Some(fields) = self.structs.get(struct_name) {
-                        if !fields.contains(field) {
-                            return Err(XeError::new(
-                                XeErrorKind::UndefinedVariable(format!("{}.{}", struct_name, field)),
-                                Some(expr.span.clone()),
-                            ));
-                        }
-                    }
-                }
-                (TypedExpressionKind::FieldAccess {
-                    object: Box::new(obj_typed),
-                    field: field.clone(),
-                }, XeType::Unknown)
-            }
-        };
-
-        let typed = TypedExpression { kind, ty, span };
-        if typed.ty == XeType::Void {
-            // A call to a function without a return value evaluates to `none`.
-            return Ok(self.wrap_to_unknown(typed));
-        }
-        Ok(typed)
-    }
-
     fn wrap_to_unknown(&self, expr: TypedExpression) -> TypedExpression {
         TypedExpression {
             ty: XeType::Unknown,
@@ -983,48 +1157,14 @@ impl SemanticAnalyzer {
             kind: TypedExpressionKind::Unwrap(Box::new(expr), ty),
         }
     }
-
-    fn push_scope(&mut self) {
-        self.scopes.push(HashMap::new());
-    }
-
-    fn pop_scope(&mut self) {
-        self.scopes.pop();
-    }
-
-    fn define_variable(&mut self, name: &str, ty: XeType, span: &Span) {
-        if let Some(scope) = self.scopes.last_mut() {
-            scope.insert(name.to_string(), SymbolInfo {
-                ty,
-                defined_at: span.clone(),
-                declared: true,
-            });
-        }
-    }
-
-    fn declare_global_placeholder(&mut self, name: &str, span: &Span) {
-        if !self.globals.contains_key(name) {
-            self.global_order.push(name.to_string());
-            self.globals.insert(name.to_string(), SymbolInfo {
-                ty: XeType::Unknown,
-                defined_at: span.clone(),
-                declared: false,
-            });
-        }
-    }
-
-    fn get_symbol_info(&self, name: &str) -> Option<&SymbolInfo> {
-        self.scopes
-            .iter()
-            .rev()
-            .find_map(|scope| scope.get(name))
-            .or_else(|| self.globals.get(name))
-    }
 }
 
-impl Default for SemanticAnalyzer {
-    fn default() -> Self {
-        Self::new()
+/// Definite-assignment state after two paths join. `None` means the path cannot be
+/// reached (it returned, broke or continued), so it imposes no constraint.
+fn meet(a: Option<HashSet<String>>, b: Option<HashSet<String>>) -> Option<HashSet<String>> {
+    match (a, b) {
+        (None, other) | (other, None) => other,
+        (Some(a), Some(b)) => Some(a.intersection(&b).cloned().collect()),
     }
 }
 
@@ -1064,19 +1204,39 @@ fn check_unique_names(names: &[String], span: &Span) -> XeResult<()> {
     Ok(())
 }
 
-/// Element and field assignments must write into a variable, e.g. `grid[0][1] = 5`.
-fn check_assignment_root(object: &Expression) -> XeResult<()> {
-    match &object.kind {
-        ExpressionKind::Identifier(_) => Ok(()),
-        ExpressionKind::Index { object, .. } | ExpressionKind::FieldAccess { object, .. } => {
-            check_assignment_root(object)
+/// Names assigned by top-level code (including inside blocks), excluding loop variables
+/// inside their own loop. Mirrors the linker's notion of module-level variables.
+fn collect_top_level_targets(statement: &Statement, targets: &mut Vec<String>) {
+    match &statement.kind {
+        StatementKind::Assignment { name, .. } => targets.push(name.clone()),
+        StatementKind::Try {
+            body,
+            catch_variable,
+            handler,
+        } => {
+            body.iter().for_each(|s| collect_top_level_targets(s, targets));
+            targets.extend(catch_variable.iter().cloned());
+            handler.iter().for_each(|s| collect_top_level_targets(s, targets));
         }
-        _ => Err(XeError::new(
-            XeErrorKind::InvalidAssignmentTarget(
-                "can only assign to elements or fields of a variable".to_string(),
-            ),
-            Some(object.span.clone()),
-        )),
+        StatementKind::If {
+            then_block,
+            else_block,
+            ..
+        } => {
+            then_block.iter().for_each(|s| collect_top_level_targets(s, targets));
+            if let Some(else_block) = else_block {
+                else_block.iter().for_each(|s| collect_top_level_targets(s, targets));
+            }
+        }
+        StatementKind::For { variable, body, .. } => {
+            let mut inner = Vec::new();
+            body.iter().for_each(|s| collect_top_level_targets(s, &mut inner));
+            targets.extend(inner.into_iter().filter(|name| name != variable));
+        }
+        StatementKind::While { body, .. } | StatementKind::Repeat { body, .. } => {
+            body.iter().for_each(|s| collect_top_level_targets(s, targets));
+        }
+        _ => {}
     }
 }
 
@@ -1093,6 +1253,10 @@ fn collect_global_names(statements: &[Statement], names: &mut Vec<String>) {
                 if let Some(else_block) = else_block {
                     collect_global_names(else_block, names);
                 }
+            }
+            StatementKind::Try { body, handler, .. } => {
+                collect_global_names(body, names);
+                collect_global_names(handler, names);
             }
             StatementKind::While { body, .. }
             | StatementKind::Repeat { body, .. }

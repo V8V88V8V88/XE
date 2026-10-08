@@ -1,6 +1,11 @@
 use std::collections::HashMap;
 
 use crate::ast::*;
+use crate::builtins::Builtin;
+use crate::error::Span;
+
+/// The XE runtime, emitted at the top of every generated program.
+const PRELUDE: &str = include_str!("runtime/prelude.rs");
 
 pub struct CodeGenerator {
     output: String,
@@ -11,28 +16,24 @@ pub struct CodeGenerator {
     globals: HashMap<String, XeType>,
     function_params: HashMap<String, Vec<XeType>>,
     function_returns: HashMap<String, XeType>,
-    current_return_type: Option<XeType>,
-}
-
-/// The variable a place expression such as `grid[0][1]` or `p.pos.x` is rooted at.
-enum PlaceRoot {
-    Local(String),
-    Global(String),
-}
-
-enum PlaceStep<'a> {
-    Index(&'a TypedExpression),
-    Field(&'a str),
-}
-
-struct Place<'a> {
-    root: PlaceRoot,
-    root_ty: XeType,
-    steps: Vec<PlaceStep<'a>>,
+    /// Source text of every module, for runtime error messages.
+    sources: HashMap<String, String>,
+    /// (file, line, source line) of statements; index 0 means "no location".
+    locations: Vec<(String, usize, String)>,
+    location_ids: HashMap<(String, usize), usize>,
+    current_location: usize,
+    /// Return type of the function being generated (`Void` for top-level code).
+    return_type: XeType,
+    /// Number of `try` bodies (which run in closures) around the current statement.
+    try_depth: usize,
+    /// `try_depth` at each enclosing loop, innermost last.
+    loop_try_depths: Vec<usize>,
+    builtin_values: Vec<Builtin>,
+    temp_counter: usize,
 }
 
 impl CodeGenerator {
-    pub fn new() -> Self {
+    pub fn new(sources: HashMap<String, String>) -> Self {
         Self {
             output: String::new(),
             indent_level: 0,
@@ -40,12 +41,23 @@ impl CodeGenerator {
             globals: HashMap::new(),
             function_params: HashMap::new(),
             function_returns: HashMap::new(),
-            current_return_type: None,
+            sources,
+            locations: vec![(String::new(), 0, String::new())],
+            location_ids: HashMap::new(),
+            current_location: 0,
+            return_type: XeType::Void,
+            try_depth: 0,
+            loop_try_depths: Vec::new(),
+            builtin_values: Vec::new(),
+            temp_counter: 0,
         }
     }
 
     pub fn generate(&mut self, program: &TypedProgram) -> String {
-        self.emit_prelude();
+        self.emit(PRELUDE);
+        self.emit("\n// ---------------------------------------------------------------------------\n");
+        self.emit("// Program\n");
+        self.emit("// ---------------------------------------------------------------------------\n\n");
 
         self.globals = program.globals.iter().cloned().collect();
         for stmt in &program.statements {
@@ -74,7 +86,7 @@ impl CodeGenerator {
             self.emit("thread_local! {\n");
             for (name, ty) in &program.globals {
                 self.emit(&format!(
-                    "    static {}: std::cell::RefCell<Option<{}>> = const {{ std::cell::RefCell::new(None) }};\n",
+                    "    static {}: RefCell<Option<{}>> = const {{ RefCell::new(None) }};\n",
                     global_key(name),
                     ty.to_rust_type()
                 ));
@@ -84,65 +96,273 @@ impl CodeGenerator {
 
         let mut main_statements = Vec::new();
         for stmt in &program.statements {
-            if matches!(
-                stmt.kind,
-                TypedStatementKind::FunctionDef { .. } | TypedStatementKind::StructDef { .. }
-            ) {
-                self.generate_statement(stmt);
-                self.emit("\n");
-            } else {
-                main_statements.push(stmt);
+            match &stmt.kind {
+                TypedStatementKind::FunctionDef {
+                    name,
+                    params,
+                    locals,
+                    body,
+                    return_type,
+                } => self.generate_function(name, params, locals, body, return_type),
+                TypedStatementKind::StructDef { name, fields } => self.generate_struct(name, fields),
+                _ => main_statements.push(stmt),
             }
         }
 
-        self.emit("fn main() {\n");
+        self.line("fn xe_main() {");
         self.indent_level += 1;
+        self.scopes = vec![HashMap::new()];
         for stmt in main_statements {
             self.generate_statement(stmt);
         }
         self.indent_level -= 1;
-        self.emit("}\n");
+        self.line("}");
+        self.emit("\n");
 
-        self.output.clone()
+        let builtins = std::mem::take(&mut self.builtin_values);
+        for builtin in builtins {
+            self.generate_builtin_value(builtin);
+        }
+
+        self.emit("static XE_LOCATIONS: &[(&str, usize, &str)] = &[\n");
+        let locations = std::mem::take(&mut self.locations);
+        for (file, line, text) in &locations {
+            self.emit(&format!("    ({:?}, {}, {:?}),\n", file, line, text));
+        }
+        self.emit("];\n\n");
+        self.emit("fn main() {\n    xe_start(xe_main);\n}\n");
+
+        std::mem::take(&mut self.output)
     }
 
-    fn emit_prelude(&mut self) {
-        self.emit(PRELUDE);
+    fn generate_function(
+        &mut self,
+        name: &str,
+        params: &[(String, XeType)],
+        locals: &[(String, XeType)],
+        body: &[TypedStatement],
+        return_type: &XeType,
+    ) {
+        let signature = params
+            .iter()
+            .map(|(p, ty)| format!("mut {}: {}", local_name(p), ty.to_rust_type()))
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.line(&format!(
+            "fn {}({}) -> {} {{",
+            name,
+            signature,
+            return_type.to_rust_type()
+        ));
+        self.indent_level += 1;
+
+        // Variables are function-scoped (as in Python), so all of them are declared up
+        // front. The defaults are never read: the analyzer rejects reads of variables
+        // that might not have been assigned.
+        let mut scope: HashMap<String, XeType> = params.iter().cloned().collect();
+        for (local, ty) in locals {
+            self.line(&format!(
+                "let mut {}: {} = {};",
+                local_name(local),
+                ty.to_rust_type(),
+                default_value(ty)
+            ));
+            scope.insert(local.clone(), ty.clone());
+        }
+
+        let saved_scopes = std::mem::replace(&mut self.scopes, vec![scope]);
+        let saved_return = std::mem::replace(&mut self.return_type, return_type.clone());
+        let saved_try_depth = std::mem::replace(&mut self.try_depth, 0);
+        let saved_loops = std::mem::take(&mut self.loop_try_depths);
+
+        for s in body {
+            self.generate_statement(s);
+        }
+        // Value for paths that fall off the end of the body.
+        match return_type {
+            XeType::Void => {}
+            ty if ty.is_dynamic() => self.line("XeValue::None"),
+            _ => self.line("unreachable!()"),
+        }
+
+        self.loop_try_depths = saved_loops;
+        self.try_depth = saved_try_depth;
+        self.return_type = saved_return;
+        self.scopes = saved_scopes;
+        self.indent_level -= 1;
+        self.line("}");
+
+        // The function as a value, callable with dynamic arguments.
+        let args = params
+            .iter()
+            .enumerate()
+            .map(|(i, (_, ty))| convert(&format!("__xe_args[{}].clone()", i), &XeType::Unknown, ty))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let call = convert(&format!("{}({})", name, args), return_type, &XeType::Unknown);
+        self.line(&cached_function_value(
+            &function_value_name(name),
+            &format!(
+                "xe_function({:?}, {n}, Some({n}), |__xe_args: Vec<XeValue>| -> XeValue {{ {} }})",
+                display_name(name),
+                call,
+                n = params.len()
+            ),
+        ));
+        self.emit("\n");
+    }
+
+    fn generate_struct(&mut self, name: &str, fields: &[String]) {
+        let params = (0..fields.len())
+            .map(|i| format!("a{}: XeValue", i))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let field_literals = fields
+            .iter()
+            .map(|f| format!("{:?}", f))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let field_values = (0..fields.len())
+            .map(|i| format!("a{}", i))
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.line(&format!("fn {}({}) -> XeValue {{", name, params));
+        self.line(&format!(
+            "    xe_make_struct({:?}, &[{}], vec![{}])",
+            display_name(name),
+            field_literals,
+            field_values
+        ));
+        self.line("}");
+        let args = (0..fields.len())
+            .map(|i| format!("__xe_args[{}].clone()", i))
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.line(&cached_function_value(
+            &function_value_name(name),
+            &format!(
+                "xe_function({:?}, {n}, Some({n}), |__xe_args: Vec<XeValue>| -> XeValue {{ {}({}) }})",
+                display_name(name),
+                name,
+                args,
+                n = fields.len()
+            ),
+        ));
+        self.emit("\n");
+    }
+
+    /// A builtin used as a value, e.g. `apply(upper, words)`.
+    fn generate_builtin_value(&mut self, builtin: Builtin) {
+        let signature = builtin.signature();
+        let body = match signature.max_args {
+            None => {
+                let call = match builtin {
+                    Builtin::Print => "{ xe_builtin_print(__xe_args); XeValue::None }",
+                    Builtin::Min => "xe_builtin_min(__xe_args)",
+                    Builtin::Max => "xe_builtin_max(__xe_args)",
+                    _ => unreachable!("only print, min and max are variadic"),
+                };
+                call.to_string()
+            }
+            Some(max) => {
+                let saved_scopes = std::mem::replace(&mut self.scopes, vec![HashMap::new()]);
+                let mut arms = Vec::new();
+                for count in signature.min_args..=max {
+                    let mut binds = String::new();
+                    let mut args = Vec::new();
+                    for i in 0..count {
+                        let name = format!("__xe_arg{}", i);
+                        binds.push_str(&format!("let {} = __xe_args[{}].clone(); ", local_name(&name), i));
+                        self.scopes[0].insert(name.clone(), XeType::Unknown);
+                        let arg = TypedExpression {
+                            kind: TypedExpressionKind::Identifier(name),
+                            ty: XeType::Unknown,
+                            span: Span::new(0, 0),
+                        };
+                        let expected = signature.param_type(i);
+                        args.push(if expected.is_dynamic() {
+                            arg
+                        } else {
+                            TypedExpression {
+                                ty: expected.clone(),
+                                span: Span::new(0, 0),
+                                kind: TypedExpressionKind::Unwrap(Box::new(arg), expected),
+                            }
+                        });
+                    }
+                    let call = TypedExpression {
+                        kind: TypedExpressionKind::BuiltinCall { builtin, args },
+                        ty: builtin_result_type(builtin, &signature.return_type),
+                        span: Span::new(0, 0),
+                    };
+                    let code = self.expr_as(&call, &XeType::Unknown);
+                    arms.push(format!("{} => {{ {}{} }}", count, binds, code));
+                }
+                self.scopes = saved_scopes;
+                format!(
+                    "match __xe_args.len() {{ {}, _ => unreachable!() }}",
+                    arms.join(", ")
+                )
+            }
+        };
+        let max = match signature.max_args {
+            Some(max) => format!("Some({})", max),
+            None => "None".to_string(),
+        };
+        self.line(&cached_function_value(
+            &builtin_value_name(builtin),
+            &format!(
+                "xe_function({:?}, {}, {}, |__xe_args: Vec<XeValue>| -> XeValue {{ {} }})",
+                builtin.name(),
+                signature.min_args,
+                max,
+                body
+            ),
+        ));
+        self.emit("\n");
+    }
+
+    fn location_id(&mut self, span: &Span) -> usize {
+        let Some(file) = &span.source_name else {
+            return 0;
+        };
+        let key = (file.clone(), span.line);
+        if let Some(id) = self.location_ids.get(&key) {
+            return *id;
+        }
+        let text = self
+            .sources
+            .get(file)
+            .and_then(|source| source.lines().nth(span.line.saturating_sub(1)))
+            .unwrap_or_default()
+            .to_string();
+        let id = self.locations.len();
+        self.locations.push((file.clone(), span.line, text));
+        self.location_ids.insert(key, id);
+        id
     }
 
     fn generate_block(&mut self, statements: &[TypedStatement]) {
         self.indent_level += 1;
-        self.scopes.push(HashMap::new());
         for s in statements {
             self.generate_statement(s);
         }
-        self.scopes.pop();
         self.indent_level -= 1;
     }
 
     fn generate_statement(&mut self, stmt: &TypedStatement) {
+        if matches!(stmt.kind, TypedStatementKind::Nop) {
+            return;
+        }
+        self.current_location = self.location_id(&stmt.span);
+        if !matches!(stmt.kind, TypedStatementKind::While { .. }) && self.current_location != 0 {
+            self.line(&format!("xe_loc({});", self.current_location));
+        }
+
         match &stmt.kind {
             TypedStatementKind::Assignment { name, value } => {
-                if let Some(ty) = self.local_type(name) {
-                    let code = self.expr_as(value, &ty);
-                    self.line(&format!("{} = {};", local_name(name), code));
-                } else if let Some(ty) = self.globals.get(name).cloned() {
-                    let code = self.expr_as(value, &ty);
-                    self.line(&format!("xe_gset(&{}, {});", global_key(name), code));
-                } else {
-                    let ty = match &value.ty {
-                        XeType::Void => XeType::Unknown,
-                        ty => ty.clone(),
-                    };
-                    let code = self.expr_as(value, &ty);
-                    self.line(&format!(
-                        "let mut {}: {} = {};",
-                        local_name(name),
-                        ty.to_rust_type(),
-                        code
-                    ));
-                    self.define_local(name, ty);
-                }
+                let code = self.assign_code(name, value);
+                self.line(&code);
             }
             TypedStatementKind::If {
                 condition,
@@ -150,7 +370,7 @@ impl CodeGenerator {
                 else_block,
             } => {
                 let cond = self.expr_as(condition, &XeType::Boolean);
-                self.line(&format!("if ({}) {{", cond));
+                self.line(&format!("if {} {{", cond));
                 self.generate_block(then_block);
                 if let Some(else_stmts) = else_block {
                     self.line("} else {");
@@ -159,219 +379,243 @@ impl CodeGenerator {
                 self.line("}");
             }
             TypedStatementKind::While { condition, body } => {
+                let location = self.current_location;
                 let cond = self.expr_as(condition, &XeType::Boolean);
-                self.line(&format!("while ({}) {{", cond));
-                self.generate_block(body);
+                self.line(&format!("while {{ xe_loc({}); {} }} {{", location, cond));
+                self.generate_loop_body(body, None);
                 self.line("}");
             }
             TypedStatementKind::Repeat { count, body } => {
                 let count = self.expr_as(count, &XeType::Number);
-                self.line(&format!(
-                    "for _ in 0..xe_expect_non_negative_integer(&XeValue::from({}), \"repeat loop count\") {{",
-                    count
-                ));
-                self.generate_block(body);
+                self.line(&format!("for _ in 0..xe_repeat_count({}) {{", count));
+                self.generate_loop_body(body, None);
                 self.line("}");
             }
             TypedStatementKind::For {
                 variable,
+                variable_type,
                 iterable,
                 body,
             } => {
-                let elem_ty = match &iterable.ty {
-                    XeType::List(inner) => (**inner).clone(),
-                    XeType::Text | XeType::Map | XeType::Struct(_) => XeType::Text,
-                    _ => XeType::Unknown,
+                let range_args = match &iterable.kind {
+                    TypedExpressionKind::BuiltinCall {
+                        builtin: Builtin::Range,
+                        args,
+                    } => Some(args),
+                    _ => None,
                 };
-                let (header, value_ty) = match &iterable.ty {
-                    XeType::List(inner) => (self.expr(iterable), (**inner).clone()),
-                    _ => {
+                let binding = match range_args {
+                    Some(args) => {
+                        let args = args
+                            .iter()
+                            .map(|arg| self.expr_as(arg, &XeType::Number))
+                            .collect::<Vec<_>>();
+                        let (start, stop, step) = match args.as_slice() {
+                            [stop] => ("0.0".to_string(), stop.clone(), "1.0".to_string()),
+                            [start, stop] => (start.clone(), stop.clone(), "1.0".to_string()),
+                            [start, stop, step] => (start.clone(), stop.clone(), step.clone()),
+                            _ => unreachable!("range() takes 1 to 3 arguments"),
+                        };
+                        self.line(&format!(
+                            "for __xe_n in xe_range({}, {}, {}) {{",
+                            start, stop, step
+                        ));
+                        convert("__xe_n", &XeType::Number, variable_type)
+                    }
+                    None => {
                         let iterable = self.expr_as(iterable, &XeType::Unknown);
-                        (format!("xe_iter(&{})", iterable), XeType::Unknown)
+                        self.line(&format!("for __xe_item in xe_iter(&{}) {{", iterable));
+                        convert("__xe_item", &XeType::Unknown, variable_type)
                     }
                 };
-                self.line(&format!("for __xe_loop_value in ({}) {{", header));
-                self.indent_level += 1;
-                self.scopes.push(HashMap::new());
-                self.line(&format!(
-                    "let mut {}: {} = {};",
-                    local_name(variable),
-                    elem_ty.to_rust_type(),
-                    convert("__xe_loop_value", &value_ty, &elem_ty)
-                ));
-                self.define_local(variable, elem_ty);
-                for s in body {
-                    self.generate_statement(s);
-                }
-                self.scopes.pop();
-                self.indent_level -= 1;
-                self.line("}");
-            }
-            TypedStatementKind::FunctionDef {
-                name,
-                params,
-                body,
-                return_type,
-            } => {
-                let signature = params
-                    .iter()
-                    .map(|(p, ty)| format!("mut {}: {}", local_name(p), ty.to_rust_type()))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                self.line(&format!(
-                    "fn {}({}) -> {} {{",
-                    function_name(name),
-                    signature,
-                    return_type.to_rust_type()
-                ));
-
-                let saved_scopes = std::mem::replace(
-                    &mut self.scopes,
-                    vec![params.iter().cloned().collect()],
-                );
-                let saved_return = self.current_return_type.replace(return_type.clone());
-                self.indent_level += 1;
-                for s in body {
-                    self.generate_statement(s);
-                }
-                // Value for paths that fall off the end of the body.
-                match return_type {
-                    XeType::Void => {}
-                    ty if ty.is_dynamic() => self.line("XeValue::None"),
-                    _ => self.line("unreachable!()"),
-                }
-                self.indent_level -= 1;
-                self.current_return_type = saved_return;
-                self.scopes = saved_scopes;
+                self.generate_loop_body(body, Some((variable, variable_type, binding)));
                 self.line("}");
             }
             TypedStatementKind::Return { value } => {
-                let return_type = self.current_return_type.clone().unwrap_or(XeType::Void);
-                match (value, &return_type) {
+                let return_type = self.return_type.clone();
+                let value = match (value, &return_type) {
                     (Some(expr), XeType::Void) => {
                         let code = self.expr(expr);
-                        self.line(&format!("{{ let _ = {}; return; }}", code));
+                        format!("{{ let _ = {}; }}", code)
                     }
-                    (Some(expr), ty) => {
-                        let code = self.expr_as(expr, ty);
-                        self.line(&format!("return {};", code));
-                    }
-                    (None, XeType::Void) => self.line("return;"),
-                    (None, ty) => {
-                        let code = convert("XeValue::None", &XeType::Unknown, ty);
-                        self.line(&format!("return {};", code));
-                    }
+                    (Some(expr), ty) => self.expr_as(expr, ty),
+                    (None, ty) => convert("XeValue::None", &XeType::Unknown, ty),
+                };
+                if self.try_depth > 0 {
+                    self.line(&format!("return XeFlow::Return({});", value));
+                } else {
+                    self.line(&format!("return {};", value));
                 }
             }
-            TypedStatementKind::Break => self.line("break;"),
-            TypedStatementKind::Continue => self.line("continue;"),
-            TypedStatementKind::Nop => {}
-            TypedStatementKind::Expression(expr) => {
-                let code = match &expr.kind {
-                    TypedExpressionKind::FunctionCall { name, args } if name == "append" => {
-                        self.generate_append(args, false)
-                    }
-                    _ => self.expr(expr),
-                };
-                self.line(&format!("let _ = {};", code));
+            TypedStatementKind::Break => {
+                let code = self.loop_exit("Break");
+                self.line(&code);
             }
-            TypedStatementKind::StructDef { name, fields } => {
-                let params = (0..fields.len())
-                    .map(|i| format!("a{}: XeValue", i))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let field_literals = fields
-                    .iter()
-                    .map(|f| format!("{:?}", f))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let field_values = (0..fields.len())
-                    .map(|i| format!("a{}", i))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                self.line(&format!(
-                    "fn {}({}) -> XeValue {{",
-                    function_name(name),
-                    params
-                ));
-                self.line(&format!(
-                    "    xe_make_struct({:?}, &[{}], vec![{}])",
-                    display_name(name),
-                    field_literals,
-                    field_values
-                ));
-                self.line("}");
+            TypedStatementKind::Continue => {
+                let code = self.loop_exit("Continue");
+                self.line(&code);
+            }
+            TypedStatementKind::Expression(expr) => {
+                let code = self.expr(expr);
+                self.line(&format!("let _ = {};", code));
             }
             TypedStatementKind::IndexAssignment {
                 object,
                 index,
                 value,
+                op,
             } => {
-                let code = match self.resolve_place(object) {
-                    Some(place) => {
-                        let container = self.place_types(&place).map(|types| types.last().cloned());
-                        match container {
-                            Ok(Some(XeType::List(inner))) => {
-                                let value = self.expr_as(value, &inner);
-                                let index = self.expr_as(index, &XeType::Number);
-                                self.place_op(
-                                    &place,
-                                    vec![format!("let __xe_val = {};", value)],
-                                    vec![format!("let __xe_idx = {};", index)],
-                                    |c, _| format!("xe_vec_set_index({}, __xe_idx, __xe_val)", c),
-                                )
-                            }
-                            Ok(Some(ty)) if ty.is_dynamic() => {
-                                let value = self.expr_as(value, &XeType::Unknown);
-                                let index = self.expr_as(index, &XeType::Unknown);
-                                self.place_op(
-                                    &place,
-                                    vec![format!("let __xe_val = {};", value)],
-                                    vec![format!("let __xe_idx = {};", index)],
-                                    |c, _| format!("xe_set_index({}, &__xe_idx, __xe_val)", c),
-                                )
-                            }
-                            Ok(Some(ty)) => runtime_error(&format!(
-                                "cannot assign to an element of {}",
-                                ty
-                            )),
-                            Ok(None) => unreachable!("place types always include the root"),
-                            Err(message) => runtime_error(&message),
-                        }
-                    }
-                    None => runtime_error("invalid assignment target"),
+                // Python order: the value, then the object, then the index.
+                let value = self.expr_as(value, &XeType::Unknown);
+                let object = self.expr_as(object, &XeType::Unknown);
+                let index = self.expr_as(index, &XeType::Unknown);
+                let update = match op {
+                    Some(op) => format!(
+                        "let __xe_v = xe_binary({:?}, xe_index(&__xe_o, &__xe_k), __xe_v); ",
+                        op.symbol()
+                    ),
+                    None => String::new(),
                 };
-                self.line(&format!("{};", code));
+                self.line(&format!(
+                    "{{ let __xe_v = {}; let __xe_o = {}; let __xe_k = {}; {}xe_set_index(&__xe_o, __xe_k, __xe_v); }}",
+                    value, object, index, update
+                ));
             }
             TypedStatementKind::FieldAssignment {
                 object,
                 field,
                 value,
+                op,
             } => {
-                let code = match self.resolve_place(object) {
-                    Some(place) => {
-                        let value = self.expr_as(value, &XeType::Unknown);
-                        self.place_op(
-                            &place,
-                            vec![format!("let __xe_val = {};", value)],
-                            Vec::new(),
-                            |c, ty| {
-                                if ty.is_dynamic() {
-                                    format!("xe_set_field({}, {:?}, __xe_val)", c, field)
-                                } else {
-                                    runtime_error(&format!(
-                                        "cannot set field '{}' on {}",
-                                        field, ty
-                                    ))
-                                }
-                            },
-                        )
-                    }
-                    None => runtime_error("invalid assignment target"),
+                let value = self.expr_as(value, &XeType::Unknown);
+                let object = self.expr_as(object, &XeType::Unknown);
+                let update = match op {
+                    Some(op) => format!(
+                        "let __xe_v = xe_binary({:?}, xe_get_field(&__xe_o, {:?}), __xe_v); ",
+                        op.symbol(),
+                        field
+                    ),
+                    None => String::new(),
                 };
-                self.line(&format!("{};", code));
+                self.line(&format!(
+                    "{{ let __xe_v = {}; let __xe_o = {}; {}xe_set_field(&__xe_o, {:?}, __xe_v); }}",
+                    value, object, update, field
+                ));
             }
+            TypedStatementKind::Try {
+                body,
+                catch_variable,
+                handler,
+            } => self.generate_try(body, catch_variable.as_deref(), handler),
+            TypedStatementKind::Nop
+            | TypedStatementKind::FunctionDef { .. }
+            | TypedStatementKind::StructDef { .. } => {}
         }
+    }
+
+    fn assign_code(&mut self, name: &str, value: &TypedExpression) -> String {
+        if let Some(ty) = self.local_type(name) {
+            let code = self.expr_as(value, &ty);
+            format!("{} = {};", local_name(name), code)
+        } else if let Some(ty) = self.globals.get(name).cloned() {
+            let code = self.expr_as(value, &ty);
+            format!("xe_gset(&{}, {});", global_key(name), code)
+        } else {
+            unreachable!("assignment to undeclared variable '{}'", name)
+        }
+    }
+
+    fn generate_loop_body(
+        &mut self,
+        body: &[TypedStatement],
+        variable: Option<(&String, &XeType, String)>,
+    ) {
+        self.indent_level += 1;
+        self.loop_try_depths.push(self.try_depth);
+        let has_variable = variable.is_some();
+        if let Some((name, ty, binding)) = variable {
+            self.line(&format!(
+                "let mut {}: {} = {};",
+                local_name(name),
+                ty.to_rust_type(),
+                binding
+            ));
+            self.scopes.push(HashMap::from([(name.clone(), ty.clone())]));
+        }
+        for s in body {
+            self.generate_statement(s);
+        }
+        if has_variable {
+            self.scopes.pop();
+        }
+        self.loop_try_depths.pop();
+        self.indent_level -= 1;
+    }
+
+    /// `break` or `continue`; inside a `try` body (a closure) it is passed out as a value.
+    fn loop_exit(&self, kind: &str) -> String {
+        match self.loop_try_depths.last() {
+            Some(depth) if *depth == self.try_depth => format!("{};", kind.to_lowercase()),
+            Some(_) => format!("return XeFlow::{};", kind),
+            None => "unreachable!()".to_string(),
+        }
+    }
+
+    /// `try` runs its body in a closure under `catch_unwind`; runtime errors are panics.
+    /// `return`, `break` and `continue` inside the body leave the closure as `XeFlow`.
+    fn generate_try(
+        &mut self,
+        body: &[TypedStatement],
+        catch_variable: Option<&str>,
+        handler: &[TypedStatement],
+    ) {
+        self.temp_counter += 1;
+        let flow = format!("__xe_flow{}", self.temp_counter);
+        let result_type = self.return_type.to_rust_type();
+
+        self.line(&format!(
+            "let {}: XeFlow<{}> = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> XeFlow<{}> {{",
+            flow, result_type, result_type
+        ));
+        self.try_depth += 1;
+        self.generate_block(body);
+        self.try_depth -= 1;
+        self.line("    XeFlow::Normal");
+        self.line("})) {");
+        self.line("    Ok(flow) => flow,");
+        self.line("    Err(payload) => {");
+        self.indent_level += 1;
+        self.line("    let __xe_message = xe_panic_message(payload);");
+        if let Some(name) = catch_variable {
+            let message = TypedExpression {
+                kind: TypedExpressionKind::Identifier("__xe_message".to_string()),
+                ty: XeType::Text,
+                span: Span::new(0, 0),
+            };
+            self.scopes.push(HashMap::from([("__xe_message".to_string(), XeType::Text)]));
+            let code = self.assign_code(name, &message);
+            self.scopes.pop();
+            // `l___xe_message` is the local-name form of the message binding.
+            self.line(&format!("    let {} = __xe_message;", local_name("__xe_message")));
+            self.line(&format!("    {}", code));
+        }
+        self.generate_block(handler);
+        self.line("    XeFlow::Normal");
+        self.indent_level -= 1;
+        self.line("    }");
+        self.line("};");
+
+        let break_arm = self.loop_exit("Break");
+        let continue_arm = self.loop_exit("Continue");
+        let return_arm = if self.try_depth > 0 {
+            "return XeFlow::Return(__xe_r);"
+        } else {
+            "return __xe_r;"
+        };
+        self.line(&format!(
+            "match {} {{ XeFlow::Normal => {{}} XeFlow::Break => {{ {} }} XeFlow::Continue => {{ {} }} XeFlow::Return(__xe_r) => {{ {} }} }}",
+            flow, break_arm, continue_arm, return_arm
+        ));
     }
 
     /// Generates `expr` and converts the result to `target`.
@@ -380,26 +624,45 @@ impl CodeGenerator {
         convert(&code, &expr.ty, target)
     }
 
+    /// Re-marks the current statement after a call returns, so later errors in the
+    /// statement are not reported at a line inside the callee.
+    fn after_call(&self, call: String) -> String {
+        if self.current_location == 0 {
+            call
+        } else {
+            format!(
+                "{{ let __xe_r = {}; xe_loc({}); __xe_r }}",
+                call, self.current_location
+            )
+        }
+    }
+
     /// Generates a Rust expression whose type is `expr.ty.to_rust_type()`.
     fn expr(&mut self, expr: &TypedExpression) -> String {
         match &expr.kind {
             TypedExpressionKind::Number(n) => format!("{:?}f64", n),
             TypedExpressionKind::String(s) => format!("{:?}.to_string()", s),
             TypedExpressionKind::Boolean(b) => b.to_string(),
+            TypedExpressionKind::None => "XeValue::None".to_string(),
             TypedExpressionKind::List(elements) => {
-                let inner = match &expr.ty {
-                    XeType::List(inner) => (**inner).clone(),
-                    _ => XeType::Unknown,
-                };
-                if elements.is_empty() {
-                    return format!("Vec::<{}>::new()", inner.to_rust_type());
-                }
                 let items = elements
                     .iter()
-                    .map(|elem| self.expr_as(elem, &inner))
+                    .map(|e| self.expr_as(e, &XeType::Unknown))
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("vec![{}]", items)
+                format!("xe_list(vec![{}])", items)
+            }
+            TypedExpressionKind::Map(entries) => {
+                let entries = entries
+                    .iter()
+                    .map(|(k, v)| {
+                        let k = self.expr_as(k, &XeType::Unknown);
+                        let v = self.expr_as(v, &XeType::Unknown);
+                        format!("({}, {})", k, v)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("xe_make_map(vec![{}])", entries)
             }
             TypedExpressionKind::Identifier(name) => {
                 if self.local_type(name).is_some() {
@@ -408,25 +671,55 @@ impl CodeGenerator {
                     let read = format!("xe_gget(&{}, {:?})", global_key(name), display_name(name));
                     convert(&read, &ty, &expr.ty)
                 } else {
-                    // Semantic analysis guarantees every identifier is defined.
-                    format!("{}.clone()", local_name(name))
+                    unreachable!("undeclared variable '{}'", name)
                 }
+            }
+            TypedExpressionKind::FunctionRef(name) => format!("{}()", function_value_name(name)),
+            TypedExpressionKind::BuiltinRef(builtin) => {
+                if !self.builtin_values.contains(builtin) {
+                    self.builtin_values.push(*builtin);
+                }
+                format!("{}()", builtin_value_name(*builtin))
             }
             TypedExpressionKind::BinaryOp { left, op, right } => self.binary_op(expr, left, *op, right),
             TypedExpressionKind::UnaryOp { op, operand } => match op {
                 UnaryOperator::Negate => format!("(-{})", self.expr_as(operand, &XeType::Number)),
                 UnaryOperator::Not => format!("(!{})", self.expr_as(operand, &XeType::Boolean)),
             },
-            TypedExpressionKind::FunctionCall { name, args } => self.function_call(expr, name, args),
+            TypedExpressionKind::FunctionCall { name, args } => {
+                let param_types = self.function_params.get(name).cloned().unwrap_or_default();
+                let args = args
+                    .iter()
+                    .zip(param_types.iter())
+                    .map(|(arg, ty)| self.expr_as(arg, ty))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let call = self.after_call(format!("{}({})", name, args));
+                // A call analyzed before its callee sees a provisional `unknown` type.
+                let actual = self.function_returns.get(name).cloned().unwrap_or(XeType::Unknown);
+                convert(&call, &actual, &expr.ty)
+            }
+            TypedExpressionKind::BuiltinCall { builtin, args } => {
+                let code = self.builtin_call(*builtin, args);
+                let actual = builtin_result_type(*builtin, &builtin.signature().return_type);
+                convert(&code, &actual, &expr.ty)
+            }
+            TypedExpressionKind::DynamicCall { callee, args } => {
+                let callee = self.expr_as(callee, &XeType::Unknown);
+                let args = args
+                    .iter()
+                    .map(|arg| self.expr_as(arg, &XeType::Unknown))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let call = self.after_call(format!("xe_call(&{}, vec![{}])", callee, args));
+                convert(&call, &XeType::Unknown, &expr.ty)
+            }
+            TypedExpressionKind::Lambda {
+                params,
+                captures,
+                body,
+            } => self.lambda(params, captures, body),
             TypedExpressionKind::Index { object, index } => {
-                if let Some(code) = self.borrowed_list_index(expr, object, index) {
-                    return code;
-                }
-                if let XeType::List(inner) = &object.ty {
-                    let object = self.expr(object);
-                    let index = self.expr_as(index, &XeType::Number);
-                    return convert(&format!("xe_vec_index(&{}, {})", object, index), inner, &expr.ty);
-                }
                 let object = self.expr_as(object, &XeType::Unknown);
                 let index = self.expr_as(index, &XeType::Unknown);
                 convert(
@@ -435,17 +728,19 @@ impl CodeGenerator {
                     &expr.ty,
                 )
             }
-            TypedExpressionKind::Map(entries) => {
-                let entries = entries
-                    .iter()
-                    .map(|(k, v)| {
-                        let k = self.expr_as(k, &XeType::Unknown);
-                        let v = self.expr_as(v, &XeType::Unknown);
-                        format!("({}.to_string(), {})", k, v)
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("xe_make_map(vec![{}])", entries)
+            TypedExpressionKind::Slice { object, start, end } => {
+                let object = self.expr_as(object, &XeType::Unknown);
+                let mut bound = |bound: &Option<Box<TypedExpression>>| match bound {
+                    Some(bound) => format!("Some({})", self.expr_as(bound, &XeType::Number)),
+                    None => "None".to_string(),
+                };
+                let start = bound(start);
+                let end = bound(end);
+                convert(
+                    &format!("xe_slice(&{}, {}, {})", object, start, end),
+                    &XeType::Unknown,
+                    &expr.ty,
+                )
             }
             TypedExpressionKind::FieldAccess { object, field } => {
                 let object = self.expr_as(object, &XeType::Unknown);
@@ -455,40 +750,56 @@ impl CodeGenerator {
                     &expr.ty,
                 )
             }
+            TypedExpressionKind::Truthy(inner) => {
+                let code = self.expr(inner);
+                match &inner.ty {
+                    XeType::Boolean => code,
+                    XeType::Number => format!("({} != 0.0)", code),
+                    XeType::Text => format!("!({}).is_empty()", code),
+                    XeType::Void => format!("{{ {}; false }}", code),
+                    _ => format!("xe_truthy(&{})", code),
+                }
+            }
             TypedExpressionKind::Wrap(inner) => self.expr_as(inner, &expr.ty),
             TypedExpressionKind::Unwrap(inner, ty) => self.expr_as(inner, ty),
         }
     }
 
-    /// `xs[i]` on a list variable reads the element without copying the whole list.
-    fn borrowed_list_index(
+    fn lambda(
         &mut self,
-        expr: &TypedExpression,
-        object: &TypedExpression,
-        index: &TypedExpression,
-    ) -> Option<String> {
-        let TypedExpressionKind::Identifier(name) = &object.kind else {
-            return None;
-        };
-        let (storage_ty, is_local) = match self.local_type(name) {
-            Some(ty) => (ty, true),
-            None => (self.globals.get(name)?.clone(), false),
-        };
-        let XeType::List(inner) = &storage_ty else {
-            return None;
-        };
-        let index = self.expr_as(index, &XeType::Number);
-        let read = if is_local {
-            format!("{{ let __xe_i = {}; xe_vec_index(&{}, __xe_i) }}", index, local_name(name))
-        } else {
-            format!(
-                "{{ let __xe_i = {}; xe_gwith(&{}, {:?}, |__xe_g| xe_vec_index(__xe_g, __xe_i)) }}",
-                index,
-                global_key(name),
-                display_name(name)
-            )
-        };
-        Some(convert(&read, inner, &expr.ty))
+        params: &[String],
+        captures: &[(String, XeType)],
+        body: &TypedExpression,
+    ) -> String {
+        let copies = captures
+            .iter()
+            .map(|(name, _)| format!("let __xe_c_{} = {}.clone(); ", name, local_name(name)))
+            .collect::<String>();
+
+        let mut scope: HashMap<String, XeType> = captures.iter().cloned().collect();
+        let mut binds = String::new();
+        for (i, param) in params.iter().enumerate() {
+            scope.insert(param.clone(), XeType::Unknown);
+            binds.push_str(&format!("let mut {} = __xe_args[{}].clone(); ", local_name(param), i));
+        }
+        for (name, _) in captures {
+            if !params.contains(name) {
+                binds.push_str(&format!("let mut {} = __xe_c_{}.clone(); ", local_name(name), name));
+            }
+        }
+
+        let saved_scopes = std::mem::replace(&mut self.scopes, vec![scope]);
+        let body = self.expr_as(body, &XeType::Unknown);
+        self.scopes = saved_scopes;
+
+        format!(
+            "{{ {}xe_function(\"<lambda>\", {n}, Some({n}), move |__xe_args: Vec<XeValue>| -> XeValue {{ xe_loc({}); {}{} }}) }}",
+            copies,
+            self.current_location,
+            binds,
+            body,
+            n = params.len()
+        )
     }
 
     fn binary_op(
@@ -498,277 +809,126 @@ impl CodeGenerator {
         op: BinaryOperator,
         right: &TypedExpression,
     ) -> String {
-        let numeric = |this: &mut Self, f: &str| {
-            let l = this.expr_as(left, &XeType::Number);
-            let r = this.expr_as(right, &XeType::Number);
-            format!("{}({}, {})", f, l, r)
-        };
-        let infix = |this: &mut Self, ty: &XeType, symbol: &str| {
-            let l = this.expr_as(left, ty);
-            let r = this.expr_as(right, ty);
-            format!("({} {} {})", l, symbol, r)
-        };
+        use XeType::{Boolean, Number, Text};
+        let l = self.expr(left);
+        let r = self.expr(right);
+        let both = |ty: &XeType| left.ty == *ty && right.ty == *ty;
         match op {
-            BinaryOperator::Equal | BinaryOperator::NotEqual => {
-                let l = self.expr_as(left, &XeType::Unknown);
-                let r = self.expr_as(right, &XeType::Unknown);
-                let negate = if op == BinaryOperator::NotEqual { "!" } else { "" };
-                format!("{}xe_eq(&{}, &{})", negate, l, r)
-            }
             BinaryOperator::Add => {
-                if left.ty == XeType::Number && right.ty == XeType::Number {
-                    infix(self, &XeType::Number, "+")
+                if both(&Number) {
+                    format!("({} + {})", l, r)
+                } else if both(&Text) {
+                    format!("xe_concat({}, &{})", l, r)
                 } else {
-                    let l = self.expr_as(left, &XeType::Unknown);
-                    let r = self.expr_as(right, &XeType::Unknown);
-                    convert(
-                        &format!("xe_add_dynamic({}, {})", l, r),
-                        &XeType::Unknown,
-                        &expr.ty,
-                    )
+                    let l = convert(&l, &left.ty, &XeType::Unknown);
+                    let r = convert(&r, &right.ty, &XeType::Unknown);
+                    convert(&format!("xe_add({}, {})", l, r), &XeType::Unknown, &expr.ty)
                 }
             }
-            BinaryOperator::Subtract => numeric(self, "xe_sub_native"),
-            BinaryOperator::Multiply => numeric(self, "xe_mul_native"),
-            BinaryOperator::Divide => numeric(self, "xe_div_native"),
-            BinaryOperator::Modulo => numeric(self, "xe_mod_native"),
-            BinaryOperator::Less => infix(self, &XeType::Number, "<"),
-            BinaryOperator::Greater => infix(self, &XeType::Number, ">"),
-            BinaryOperator::LessEqual => infix(self, &XeType::Number, "<="),
-            BinaryOperator::GreaterEqual => infix(self, &XeType::Number, ">="),
-            BinaryOperator::And => infix(self, &XeType::Boolean, "&&"),
-            BinaryOperator::Or => infix(self, &XeType::Boolean, "||"),
+            BinaryOperator::Subtract => format!("({} - {})", l, r),
+            BinaryOperator::Multiply => format!("({} * {})", l, r),
+            BinaryOperator::Divide => format!("xe_div({}, {})", l, r),
+            BinaryOperator::FloorDivide => format!("xe_floor_div({}, {})", l, r),
+            BinaryOperator::Modulo => format!("xe_mod({}, {})", l, r),
+            BinaryOperator::Power => format!("xe_pow({}, {})", l, r),
+            BinaryOperator::Less
+            | BinaryOperator::Greater
+            | BinaryOperator::LessEqual
+            | BinaryOperator::GreaterEqual => {
+                if both(&Number) || both(&Text) {
+                    format!("({} {} {})", l, op.symbol(), r)
+                } else {
+                    let l = convert(&l, &left.ty, &XeType::Unknown);
+                    let r = convert(&r, &right.ty, &XeType::Unknown);
+                    format!("xe_compare(&{}, &{}, {:?})", l, r, op.symbol())
+                }
+            }
+            BinaryOperator::Equal | BinaryOperator::NotEqual => {
+                let equal = if both(&Number) {
+                    format!("xe_num_eq({}, {})", l, r)
+                } else if both(&Text) || both(&Boolean) {
+                    format!("({} == {})", l, r)
+                } else {
+                    let l = convert(&l, &left.ty, &XeType::Unknown);
+                    let r = convert(&r, &right.ty, &XeType::Unknown);
+                    format!("xe_eq(&{}, &{})", l, r)
+                };
+                if op == BinaryOperator::NotEqual {
+                    format!("(!{})", equal)
+                } else {
+                    equal
+                }
+            }
+            BinaryOperator::In => format!("xe_in(&{}, &{})", l, r),
+            BinaryOperator::NotIn => format!("(!xe_in(&{}, &{}))", l, r),
+            BinaryOperator::And => format!("({} && {})", l, r),
+            BinaryOperator::Or => format!("({} || {})", l, r),
         }
     }
 
-    fn function_call(&mut self, expr: &TypedExpression, name: &str, args: &[TypedExpression]) -> String {
-        let unknown = XeType::Unknown;
-        match name {
-            "print" => {
-                let args = args
-                    .iter()
-                    .map(|arg| self.expr_as(arg, &unknown))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("xe_builtin_print(vec![{}])", args)
-            }
-            "input" => {
-                let prompt = match args.first() {
-                    Some(arg) => self.expr_as(arg, &XeType::Text),
-                    None => "String::new()".to_string(),
-                };
-                format!("xe_builtin_input(&{})", prompt)
-            }
-            "length" | "type" | "keys" | "values" => {
-                let arg = self.expr_as(&args[0], &unknown);
-                format!("xe_builtin_{}(&{})", name, arg)
-            }
-            "convert" => {
-                let value = self.expr_as(&args[0], &unknown);
-                let target = self.expr_as(&args[1], &XeType::Text);
-                format!("xe_builtin_convert(&{}, &{})", value, target)
-            }
-            "has_key" | "contains" => {
-                let target = self.expr_as(&args[0], &unknown);
-                let item = self.expr_as(&args[1], &unknown);
-                format!("xe_builtin_{}(&{}, &{})", name, target, item)
-            }
-            "split" => {
-                let text = self.expr_as(&args[0], &XeType::Text);
-                let delim = self.expr_as(&args[1], &XeType::Text);
-                format!("xe_builtin_split(&{}, &{})", text, delim)
-            }
-            "join" => {
-                let list = self.expr_as(&args[0], &unknown);
-                let delim = self.expr_as(&args[1], &XeType::Text);
-                format!("xe_builtin_join(&{}.as_list(), &{})", list, delim)
-            }
-            "append" => {
-                let code = self.generate_append(args, true);
-                convert(&code, &unknown, &expr.ty)
-            }
-            "pop" => {
-                let code = self.generate_pop(args);
-                convert(&code, &unknown, &expr.ty)
-            }
-            _ => {
-                let param_types = self
-                    .function_params
-                    .get(name)
-                    .cloned()
-                    .unwrap_or_else(|| vec![XeType::Unknown; args.len()]);
-                let args = args
-                    .iter()
-                    .zip(param_types.iter())
-                    .map(|(arg, ty)| self.expr_as(arg, ty))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let call = format!("{}({})", function_name(name), args);
-                // A call analyzed before its callee was sees a provisional `unknown` type.
-                let actual = self.function_returns.get(name).cloned().unwrap_or(XeType::Unknown);
-                convert(&call, &actual, &expr.ty)
-            }
-        }
-    }
-
-    /// `append(list, item)` mutates the list in place; as an expression it evaluates to the list.
-    fn generate_append(&mut self, args: &[TypedExpression], want_value: bool) -> String {
-        let Some(place) = self.resolve_place(strip_coercions(&args[0])) else {
-            let list = self.expr_as(&args[0], &XeType::Unknown);
-            let item = self.expr_as(&args[1], &XeType::Unknown);
-            return format!("xe_builtin_append({}, {})", list, item);
+    fn builtin_call(&mut self, builtin: Builtin, args: &[TypedExpression]) -> String {
+        let a: Vec<String> = args.iter().map(|arg| self.expr(arg)).collect();
+        let optional = |i: usize| match a.get(i) {
+            Some(code) => format!("Some({})", code),
+            None => "None".to_string(),
         };
-
-        let container = match self.place_types(&place) {
-            Ok(types) => types.last().cloned().unwrap_or(XeType::Unknown),
-            Err(message) => return runtime_error(&message),
-        };
-        let item_ty = match &container {
-            XeType::List(inner) => (**inner).clone(),
-            _ => XeType::Unknown,
-        };
-        let item = self.expr_as(&args[1], &item_ty);
-        self.place_op(
-            &place,
-            vec![format!("let __xe_item = {};", item)],
-            Vec::new(),
-            |c, ty| {
-                let (push, list_value) = match ty {
-                    XeType::List(_) => ("__xe_t.push(__xe_item);", "XeValue::from(__xe_t.clone())"),
-                    ty if ty.is_dynamic() => ("xe_val_push(__xe_t, __xe_item);", "__xe_t.clone()"),
-                    ty => return runtime_error(&format!("append() expected list, got {}", ty)),
-                };
-                if want_value {
-                    format!("{{ let __xe_t = {}; {} {} }}", c, push, list_value)
-                } else {
-                    format!("{{ let __xe_t = {}; {} }}", c, push)
-                }
+        let name = builtin.name();
+        match builtin {
+            Builtin::Print => format!("xe_builtin_print(vec![{}])", a.join(", ")),
+            Builtin::Min | Builtin::Max => format!("xe_builtin_{}(vec![{}])", name, a.join(", ")),
+            Builtin::Input => match a.first() {
+                Some(prompt) => format!("xe_builtin_input(&{})", prompt),
+                None => "xe_builtin_input(\"\")".to_string(),
             },
-        )
-    }
-
-    /// `pop(list)` removes and returns the last element of the list in place.
-    fn generate_pop(&mut self, args: &[TypedExpression]) -> String {
-        let Some(place) = self.resolve_place(strip_coercions(&args[0])) else {
-            let list = self.expr_as(&args[0], &XeType::Unknown);
-            return format!("xe_builtin_pop({})", list);
-        };
-        self.place_op(&place, Vec::new(), Vec::new(), |c, ty| match ty {
-            XeType::List(inner) => convert(&format!("{}.xe_pop()", c), inner, &XeType::Unknown),
-            ty if ty.is_dynamic() => format!("xe_val_pop({})", c),
-            ty => runtime_error(&format!("pop() expected list, got {}", ty)),
-        })
-    }
-
-    fn resolve_place<'a>(&self, expr: &'a TypedExpression) -> Option<Place<'a>> {
-        match &expr.kind {
-            TypedExpressionKind::Identifier(name) => {
-                let (root, root_ty) = if let Some(ty) = self.local_type(name) {
-                    (PlaceRoot::Local(name.clone()), ty)
-                } else {
-                    let ty = self.globals.get(name)?.clone();
-                    (PlaceRoot::Global(name.clone()), ty)
-                };
-                Some(Place {
-                    root,
-                    root_ty,
-                    steps: Vec::new(),
-                })
+            Builtin::Length
+            | Builtin::Type
+            | Builtin::Keys
+            | Builtin::Values
+            | Builtin::Sum
+            | Builtin::Sort
+            | Builtin::Reverse
+            | Builtin::Copy
+            | Builtin::Upper
+            | Builtin::Lower
+            | Builtin::Trim
+            | Builtin::ReadFile
+            | Builtin::FileExists
+            | Builtin::Error => format!("xe_builtin_{}(&{})", name, a[0]),
+            Builtin::Convert
+            | Builtin::Remove
+            | Builtin::HasKey
+            | Builtin::Contains
+            | Builtin::Join
+            | Builtin::StartsWith
+            | Builtin::EndsWith
+            | Builtin::Find
+            | Builtin::WriteFile
+            | Builtin::AppendFile => format!("xe_builtin_{}(&{}, &{})", name, a[0], a[1]),
+            Builtin::Replace => format!("xe_builtin_replace(&{}, &{}, &{})", a[0], a[1], a[2]),
+            Builtin::Append => format!("xe_builtin_append(&{}, {})", a[0], a[1]),
+            Builtin::Insert => format!("xe_builtin_insert(&{}, {}, {})", a[0], a[1], a[2]),
+            Builtin::Pop => format!("xe_builtin_pop(&{}, {})", a[0], optional(1)),
+            Builtin::Split => match a.get(1) {
+                Some(separator) => format!("xe_builtin_split(&{}, Some(({}).as_str()))", a[0], separator),
+                None => format!("xe_builtin_split(&{}, None)", a[0]),
+            },
+            Builtin::Range => match a.as_slice() {
+                [stop] => format!("xe_builtin_range(0.0, {}, 1.0)", stop),
+                [start, stop] => format!("xe_builtin_range({}, {}, 1.0)", start, stop),
+                [start, stop, step] => format!("xe_builtin_range({}, {}, {})", start, stop, step),
+                _ => unreachable!("range() takes 1 to 3 arguments"),
+            },
+            Builtin::Abs | Builtin::Floor | Builtin::Ceil | Builtin::Sqrt => {
+                format!("xe_builtin_{}({})", name, a[0])
             }
-            TypedExpressionKind::Index { object, index } => {
-                let mut place = self.resolve_place(object)?;
-                place.steps.push(PlaceStep::Index(index));
-                Some(place)
-            }
-            TypedExpressionKind::FieldAccess { object, field } => {
-                let mut place = self.resolve_place(object)?;
-                place.steps.push(PlaceStep::Field(field));
-                Some(place)
-            }
-            _ => None,
-        }
-    }
-
-    /// The storage type at the root and after each step of a place.
-    fn place_types(&self, place: &Place) -> Result<Vec<XeType>, String> {
-        let mut types = vec![place.root_ty.clone()];
-        for step in &place.steps {
-            let current = types.last().unwrap();
-            let next = match (step, current) {
-                (PlaceStep::Index(_), XeType::List(inner)) => (**inner).clone(),
-                (_, ty) if ty.is_dynamic() => XeType::Unknown,
-                (PlaceStep::Index(_), ty) => return Err(format!("cannot index into {} for assignment", ty)),
-                (PlaceStep::Field(field), ty) => {
-                    return Err(format!("cannot access field '{}' on {}", field, ty))
-                }
-            };
-            types.push(next);
-        }
-        Ok(types)
-    }
-
-    /// Runs `op` on a mutable reference to the storage of `place`. `before` is evaluated
-    /// first, then the index expressions of the place, then `after`, and only then is
-    /// the storage borrowed, so user code never runs while the borrow is held.
-    fn place_op(
-        &mut self,
-        place: &Place,
-        before: Vec<String>,
-        after: Vec<String>,
-        op: impl FnOnce(&str, &XeType) -> String,
-    ) -> String {
-        let types = match self.place_types(place) {
-            Ok(types) => types,
-            Err(message) => return format!("{{ {} {} }}", before.join(" "), runtime_error(&message)),
-        };
-
-        let mut lets = before;
-        let mut target = "__xe_root".to_string();
-        for (i, step) in place.steps.iter().enumerate() {
-            match (step, &types[i]) {
-                (PlaceStep::Index(index), XeType::List(_)) => {
-                    let key = self.expr_as(index, &XeType::Number);
-                    lets.push(format!("let __xe_k{} = {};", i, key));
-                    target = format!("xe_vec_slot({}, __xe_k{})", target, i);
-                }
-                (PlaceStep::Index(index), _) => {
-                    let key = self.expr_as(index, &XeType::Unknown);
-                    lets.push(format!("let __xe_k{} = {};", i, key));
-                    target = format!("xe_dyn_slot({}, &__xe_k{})", target, i);
-                }
-                (PlaceStep::Field(field), _) => {
-                    target = format!("xe_field_slot({}, {:?})", target, field);
-                }
-            }
-        }
-        lets.extend(after);
-
-        let body = op(&target, types.last().unwrap());
-        match &place.root {
-            PlaceRoot::Local(name) => format!(
-                "{{ {} let __xe_root = &mut {}; {} }}",
-                lets.join(" "),
-                local_name(name),
-                body
-            ),
-            PlaceRoot::Global(name) => format!(
-                "{{ {} xe_gmut(&{}, {:?}, move |__xe_root| {{ {} }}) }}",
-                lets.join(" "),
-                global_key(name),
-                display_name(name),
-                body
-            ),
+            Builtin::Round => format!("xe_builtin_round({}, {})", a[0], optional(1)),
+            Builtin::Random | Builtin::Args => format!("xe_builtin_{}()", name),
+            Builtin::Exit => format!("xe_builtin_exit({})", optional(0)),
         }
     }
 
     fn local_type(&self, name: &str) -> Option<XeType> {
         self.scopes.iter().rev().find_map(|scope| scope.get(name)).cloned()
-    }
-
-    fn define_local(&mut self, name: &str, ty: XeType) {
-        if let Some(scope) = self.scopes.last_mut() {
-            scope.insert(name.to_string(), ty);
-        }
     }
 
     fn line(&mut self, s: &str) {
@@ -784,9 +944,12 @@ impl CodeGenerator {
     }
 }
 
-impl Default for CodeGenerator {
-    fn default() -> Self {
-        Self::new()
+/// The Rust type a builtin's runtime function actually returns. `convert`, `min` and
+/// `max` return dynamic values even when the analyzer knows a more precise type.
+fn builtin_result_type(builtin: Builtin, declared: &XeType) -> XeType {
+    match builtin {
+        Builtin::Convert | Builtin::Min | Builtin::Max => XeType::Unknown,
+        _ => declared.clone(),
     }
 }
 
@@ -805,43 +968,32 @@ fn convert(code: &str, from: &XeType, to: &XeType) -> String {
     match (from.is_dynamic(), to.is_dynamic()) {
         (true, true) => code.to_string(),
         (false, true) => format!("XeValue::from({})", code),
-        (true, false) => from_dynamic(code, to),
-        (false, false) => match (from, to) {
-            (XeType::List(a), XeType::List(b)) => format!(
-                "({}).into_iter().map(|__v| {}).collect::<Vec<_>>()",
-                code,
-                convert("__v", a, b)
-            ),
-            _ => from_dynamic(&format!("XeValue::from({})", code), to),
+        (true, false) => match to {
+            XeType::Number => format!("({}).as_f64()", code),
+            XeType::Boolean => format!("({}).as_bool()", code),
+            XeType::Text => format!("({}).as_string()", code),
+            _ => unreachable!("only scalars are native"),
         },
+        (false, false) => convert(&format!("XeValue::from({})", code), &XeType::Unknown, to),
     }
 }
 
-fn from_dynamic(code: &str, to: &XeType) -> String {
-    match to {
-        XeType::Number => format!("({}).as_f64()", code),
-        XeType::Boolean => format!("({}).as_bool()", code),
-        XeType::Text => format!("({}).as_string()", code),
-        XeType::List(inner) => format!(
-            "({}).as_list().into_iter().map(|__v| {}).collect::<Vec<_>>()",
-            code,
-            convert("__v", &XeType::Unknown, inner)
-        ),
-        _ => code.to_string(),
-    }
+/// A function returning the same function value every time, so `f == f` holds.
+fn cached_function_value(name: &str, value: &str) -> String {
+    format!(
+        "fn {}() -> XeValue {{ thread_local! {{ static VALUE: XeValue = {}; }} VALUE.with(|v| v.clone()) }}",
+        name, value
+    )
 }
 
-fn strip_coercions(expr: &TypedExpression) -> &TypedExpression {
-    match &expr.kind {
-        TypedExpressionKind::Wrap(inner) | TypedExpressionKind::Unwrap(inner, _) => {
-            strip_coercions(inner)
-        }
-        _ => expr,
+fn default_value(ty: &XeType) -> &'static str {
+    match ty {
+        XeType::Number => "0.0",
+        XeType::Boolean => "false",
+        XeType::Text => "String::new()",
+        XeType::Void => "()",
+        _ => "XeValue::None",
     }
-}
-
-fn runtime_error(message: &str) -> String {
-    format!("xe_runtime_error({:?})", message)
 }
 
 /// Locals get a prefix so they can never collide with Rust keywords or runtime names.
@@ -853,12 +1005,12 @@ fn global_key(name: &str) -> String {
     format!("XE_G_{}", name)
 }
 
-fn function_name(name: &str) -> String {
-    if name.starts_with("xe_m") {
-        name.to_string()
-    } else {
-        format!("f_{}", name)
-    }
+fn function_value_name(name: &str) -> String {
+    format!("xe_fnval_{}", name)
+}
+
+fn builtin_value_name(builtin: Builtin) -> String {
+    format!("xe_builtin_value_{}", builtin.name())
 }
 
 /// The user-facing name of a linked symbol such as `xe_m0_count`.
@@ -868,687 +1020,3 @@ fn display_name(name: &str) -> &str {
         .and_then(|rest| rest.strip_prefix('_'))
         .unwrap_or(name)
 }
-
-const PRELUDE: &str = r#"#![allow(dead_code, unused_mut, unused_variables, non_snake_case, non_upper_case_globals, unused_parens, unused_braces, unreachable_code)]
-use std::io::{self, Write};
-
-#[derive(Clone, Debug)]
-enum XeValue {
-    Number(f64),
-    Text(String),
-    Boolean(bool),
-    List(Vec<XeValue>),
-    Map(std::collections::HashMap<String, XeValue>),
-    Struct {
-        name: String,
-        fields: std::collections::HashMap<String, XeValue>,
-    },
-    None,
-}
-
-impl From<f64> for XeValue {
-    fn from(n: f64) -> Self { XeValue::Number(n) }
-}
-
-impl From<bool> for XeValue {
-    fn from(b: bool) -> Self { XeValue::Boolean(b) }
-}
-
-impl From<String> for XeValue {
-    fn from(s: String) -> Self { XeValue::Text(s) }
-}
-
-impl From<&str> for XeValue {
-    fn from(s: &str) -> Self { XeValue::Text(s.to_string()) }
-}
-
-impl From<XeValue> for f64 {
-    fn from(v: XeValue) -> Self { xe_expect_number(&v, "conversion") }
-}
-
-impl From<XeValue> for bool {
-    fn from(v: XeValue) -> Self { v.as_bool() }
-}
-
-impl From<XeValue> for String {
-    fn from(v: XeValue) -> Self { v.to_string() }
-}
-
-impl From<XeValue> for Vec<XeValue> {
-    fn from(v: XeValue) -> Self { v.as_list() }
-}
-
-impl From<XeValue> for Vec<String> {
-    fn from(v: XeValue) -> Self {
-        v.as_list().into_iter().map(|item| item.to_string()).collect()
-    }
-}
-
-impl From<XeValue> for Vec<f64> {
-    fn from(v: XeValue) -> Self {
-        v.as_list().into_iter().map(|item| item.as_f64()).collect()
-    }
-}
-
-impl From<XeValue> for Vec<bool> {
-    fn from(v: XeValue) -> Self {
-        v.as_list().into_iter().map(|item| item.as_bool()).collect()
-    }
-}
-
-impl<T: Into<XeValue>> From<Vec<T>> for XeValue {
-    fn from(v: Vec<T>) -> Self {
-        XeValue::List(v.into_iter().map(|item| item.into()).collect())
-    }
-}
-
-impl std::fmt::Display for XeValue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            XeValue::Number(n) => {
-                if *n == 0.0 {
-                    // Avoid printing negative zero as "-0".
-                    write!(f, "0")
-                } else {
-                    write!(f, "{}", n)
-                }
-            }
-            XeValue::Text(s) => write!(f, "{}", s),
-            XeValue::Boolean(b) => write!(f, "{}", if *b { "true" } else { "false" }),
-            XeValue::List(items) => {
-                write!(f, "[")?;
-                for (i, item) in items.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}", item)?;
-                }
-                write!(f, "]")
-            }
-            XeValue::Map(m) => {
-                write!(f, "{{")?;
-                let mut entries = m.iter().collect::<Vec<_>>();
-                entries.sort_by_key(|(k, _)| (*k).clone());
-                for (i, (k, v)) in entries.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "\"{}\": {}", k, v)?;
-                }
-                write!(f, "}}")
-            }
-            XeValue::Struct { name, fields } => {
-                write!(f, "{} {{ ", name)?;
-                let mut entries = fields.iter().collect::<Vec<_>>();
-                entries.sort_by_key(|(k, _)| (*k).clone());
-                for (i, (k, v)) in entries.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "{}: {}", k, v)?;
-                }
-                write!(f, " }}")
-            }
-            XeValue::None => write!(f, "none"),
-        }
-    }
-}
-
-impl XeValue {
-    fn as_bool(&self) -> bool {
-        match self {
-            XeValue::Number(n) => *n != 0.0,
-            XeValue::Text(s) => !s.is_empty(),
-            XeValue::Boolean(b) => *b,
-            XeValue::List(l) => !l.is_empty(),
-            XeValue::Map(m) => !m.is_empty(),
-            XeValue::Struct { .. } => true,
-            XeValue::None => false,
-        }
-    }
-
-    fn as_f64(&self) -> f64 {
-        xe_expect_number(self, "conversion")
-    }
-
-    fn as_string(&self) -> String {
-        self.to_string()
-    }
-
-    fn as_list(&self) -> Vec<XeValue> {
-        match self {
-            XeValue::List(l) => l.clone(),
-            _ => xe_runtime_error(&format!(
-                "expected list, got {}",
-                self.type_name()
-            )),
-        }
-    }
-
-    fn type_name(&self) -> &'static str {
-        match self {
-            XeValue::Number(_) => "number",
-            XeValue::Text(_) => "text",
-            XeValue::Boolean(_) => "boolean",
-            XeValue::List(_) => "list",
-            XeValue::Map(_) => "map",
-            XeValue::Struct { .. } => "struct",
-            XeValue::None => "none",
-        }
-    }
-}
-
-fn xe_runtime_error(message: &str) -> ! {
-    eprintln!("Runtime error: {}", message);
-    std::process::exit(1);
-}
-
-fn xe_expect_number(value: &XeValue, context: &str) -> f64 {
-    match value {
-        XeValue::Number(n) => *n,
-        _ => xe_runtime_error(&format!(
-            "{} expected a number, got {}",
-            context,
-            value.type_name()
-        )),
-    }
-}
-
-fn xe_expect_non_negative_integer(value: &XeValue, context: &str) -> usize {
-    let number = xe_expect_number(value, context);
-    if !number.is_finite() || number < 0.0 || number.fract() != 0.0 {
-        xe_runtime_error(&format!(
-            "{} expected a non-negative integer, got {}",
-            context,
-            number
-        ));
-    }
-    number as usize
-}
-
-fn xe_builtin_print(args: Vec<XeValue>) {
-    let output: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-    println!("{}", output.join(" "));
-}
-
-fn xe_builtin_input(prompt: &str) -> String {
-    print!("{}", prompt);
-    io::stdout().flush().unwrap();
-    let mut input = String::new();
-    io::stdin().read_line(&mut input).unwrap();
-    input.trim().to_string()
-}
-
-fn xe_builtin_length(value: &XeValue) -> f64 {
-    match value {
-        XeValue::Text(s) => s.chars().count() as f64,
-        XeValue::List(l) => l.len() as f64,
-        XeValue::Map(m) => m.len() as f64,
-        XeValue::Struct { fields, .. } => fields.len() as f64,
-        _ => xe_runtime_error(&format!(
-            "length() expected text, list, map, or struct, got {}",
-            value.type_name()
-        )),
-    }
-}
-
-fn xe_builtin_type(value: &XeValue) -> String {
-    value.type_name().to_string()
-}
-
-fn xe_builtin_convert(value: &XeValue, target_type: &str) -> XeValue {
-    match target_type {
-        "number" => match value {
-            XeValue::Number(n) => XeValue::Number(*n),
-            XeValue::Text(s) => match s.parse::<f64>() {
-                Ok(n) => XeValue::Number(n),
-                Err(_) => xe_runtime_error(&format!(
-                    "cannot convert text '{}' to number",
-                    s
-                )),
-            },
-            XeValue::Boolean(b) => XeValue::Number(if *b { 1.0 } else { 0.0 }),
-            XeValue::List(_) => xe_runtime_error("cannot convert list to number"),
-            _ => xe_runtime_error("cannot convert value to number"),
-        },
-        "text" => XeValue::Text(value.to_string()),
-        "boolean" => XeValue::Boolean(value.as_bool()),
-        _ => xe_runtime_error(&format!(
-            "unsupported convert() target '{}'",
-            target_type
-        )),
-    }
-}
-
-fn xe_add_dynamic(left: XeValue, right: XeValue) -> XeValue {
-    match (&left, &right) {
-        (XeValue::Text(a), _) => XeValue::Text(format!("{}{}", a, right)),
-        (_, XeValue::Text(b)) => XeValue::Text(format!("{}{}", left, b)),
-        (XeValue::List(a), XeValue::List(b)) => {
-            let mut result = a.clone();
-            result.extend(b.clone());
-            XeValue::List(result)
-        }
-        (XeValue::Number(a), XeValue::Number(b)) => XeValue::Number(a + b),
-        _ => xe_runtime_error(&format!(
-            "operator '+' is not defined for {} and {}",
-            left.type_name(),
-            right.type_name()
-        )),
-    }
-}
-
-fn xe_sub_native(left: f64, right: f64) -> f64 { left - right }
-fn xe_mul_native(left: f64, right: f64) -> f64 { left * right }
-fn xe_div_native(left: f64, right: f64) -> f64 {
-    if right == 0.0 { xe_runtime_error("division by zero"); }
-    left / right
-}
-fn xe_mod_native(left: f64, right: f64) -> f64 {
-    if right == 0.0 { xe_runtime_error("modulo by zero"); }
-    left % right
-}
-
-fn xe_eq(left: &XeValue, right: &XeValue) -> bool {
-    match (left, right) {
-        (XeValue::Number(a), XeValue::Number(b)) => {
-            if a == b {
-                true
-            } else {
-                (a - b).abs() <= f64::EPSILON * a.abs().max(b.abs()).max(1.0)
-            }
-        }
-        (XeValue::Text(a), XeValue::Text(b)) => a == b,
-        (XeValue::Boolean(a), XeValue::Boolean(b)) => a == b,
-        (XeValue::None, XeValue::None) => true,
-        (XeValue::List(a), XeValue::List(b)) => {
-            if a.len() != b.len() {
-                return false;
-            }
-            for (i, item) in a.iter().enumerate() {
-                if !xe_eq(item, &b[i]) {
-                    return false;
-                }
-            }
-            true
-        }
-        (XeValue::Map(a), XeValue::Map(b)) => {
-            if a.len() != b.len() {
-                return false;
-            }
-            for (k, v) in a {
-                if let Some(bv) = b.get(k) {
-                    if !xe_eq(v, bv) {
-                        return false;
-                    }
-                } else {
-                    return false;
-                }
-            }
-            true
-        }
-        (XeValue::Struct { name: n1, fields: f1 }, XeValue::Struct { name: n2, fields: f2 }) => {
-            if n1 != n2 || f1.len() != f2.len() {
-                return false;
-            }
-            for (k, v) in f1 {
-                if let Some(bv) = f2.get(k) {
-                    if !xe_eq(v, bv) {
-                        return false;
-                    }
-                } else {
-                    return false;
-                }
-            }
-            true
-        }
-        _ => false,
-    }
-}
-
-fn xe_index_check(idx: f64) -> usize {
-    if !idx.is_finite() || idx < 0.0 || idx.fract() != 0.0 {
-        xe_runtime_error(&format!("index access expected a non-negative integer, got {}", idx));
-    }
-    idx as usize
-}
-
-fn xe_vec_index<T: Clone>(list: &[T], idx: f64) -> T {
-    let i = xe_index_check(idx);
-    if i >= list.len() {
-        xe_runtime_error(&format!("list index {} out of bounds", i));
-    }
-    list[i].clone()
-}
-
-fn xe_index(obj: &XeValue, idx: &XeValue) -> XeValue {
-    match obj {
-        XeValue::List(l) => {
-            let i = xe_index_check(idx.as_f64());
-            l.get(i).cloned().unwrap_or_else(|| xe_runtime_error(&format!("list index {} out of bounds", i)))
-        }
-        XeValue::Text(s) => {
-            let i = xe_index_check(idx.as_f64());
-            s.chars().nth(i).map(|c| XeValue::Text(c.to_string())).unwrap_or_else(|| {
-                xe_runtime_error(&format!("text index {} out of bounds", i))
-            })
-        }
-        XeValue::Map(m) => {
-            let k = idx.to_string();
-            m.get(&k).cloned().unwrap_or_else(|| {
-                xe_runtime_error(&format!("key '{}' not found in map", k))
-            })
-        }
-        XeValue::Struct { name, fields } => {
-            let k = idx.to_string();
-            fields.get(&k).cloned().unwrap_or_else(|| {
-                xe_runtime_error(&format!("struct '{}' has no field '{}'", name, k))
-            })
-        }
-        _ => xe_runtime_error(&format!(
-            "index access expected text, list, map, or struct, got {}",
-            obj.type_name()
-        )),
-    }
-}
-
-fn xe_set_index(obj: &mut XeValue, idx: &XeValue, val: XeValue) {
-    match obj {
-        XeValue::List(l) => {
-            let i = xe_index_check(idx.as_f64());
-            if i >= l.len() {
-                xe_runtime_error(&format!("list index {} out of bounds", i));
-            }
-            l[i] = val;
-        }
-        XeValue::Map(m) => {
-            m.insert(idx.to_string(), val);
-        }
-        XeValue::Struct { fields, .. } => {
-            fields.insert(idx.to_string(), val);
-        }
-        _ => xe_runtime_error(&format!("cannot index assign to {}", obj.type_name())),
-    }
-}
-
-fn xe_vec_set_index<T>(list: &mut Vec<T>, idx: f64, val: T) {
-    let i = xe_index_check(idx);
-    if i >= list.len() {
-        xe_runtime_error(&format!("list index {} out of bounds", i));
-    }
-    list[i] = val;
-}
-
-fn xe_get_field(obj: &XeValue, field: &str) -> XeValue {
-    match obj {
-        XeValue::Struct { name, fields } => {
-            fields.get(field).cloned().unwrap_or_else(|| {
-                xe_runtime_error(&format!("struct '{}' has no field '{}'", name, field))
-            })
-        }
-        XeValue::Map(m) => {
-            m.get(field).cloned().unwrap_or_else(|| {
-                xe_runtime_error(&format!("map has no field '{}'", field))
-            })
-        }
-        _ => xe_runtime_error(&format!("cannot access field '{}' on {}", field, obj.type_name())),
-    }
-}
-
-fn xe_set_field(obj: &mut XeValue, field: &str, val: XeValue) {
-    match obj {
-        XeValue::Struct { fields, .. } => {
-            fields.insert(field.to_string(), val);
-        }
-        XeValue::Map(m) => {
-            m.insert(field.to_string(), val);
-        }
-        _ => xe_runtime_error(&format!("cannot set field '{}' on {}", field, obj.type_name())),
-    }
-}
-
-fn xe_make_map(pairs: Vec<(String, XeValue)>) -> XeValue {
-    let mut map = std::collections::HashMap::new();
-    for (k, v) in pairs {
-        map.insert(k, v);
-    }
-    XeValue::Map(map)
-}
-
-fn xe_make_struct(name: &str, field_names: &[&str], values: Vec<XeValue>) -> XeValue {
-    let mut fields = std::collections::HashMap::new();
-    for (k, v) in field_names.iter().zip(values.into_iter()) {
-        fields.insert(k.to_string(), v);
-    }
-    XeValue::Struct {
-        name: name.to_string(),
-        fields,
-    }
-}
-
-fn xe_val_push(val: &mut XeValue, item: XeValue) {
-    match val {
-        XeValue::List(l) => l.push(item),
-        _ => xe_runtime_error(&format!("append() expected list, got {}", val.type_name())),
-    }
-}
-
-fn xe_val_pop(val: &mut XeValue) -> XeValue {
-    match val {
-        XeValue::List(l) => l.pop().unwrap_or_else(|| xe_runtime_error("pop() called on empty list")),
-        _ => xe_runtime_error(&format!("pop() expected list, got {}", val.type_name())),
-    }
-}
-
-fn xe_builtin_append(mut target: XeValue, item: XeValue) -> XeValue {
-    xe_val_push(&mut target, item);
-    target
-}
-
-fn xe_builtin_pop(mut target: XeValue) -> XeValue {
-    xe_val_pop(&mut target)
-}
-
-trait XePush<T> {
-    fn xe_push(&mut self, item: T);
-}
-
-impl<T> XePush<T> for Vec<T> {
-    fn xe_push(&mut self, item: T) {
-        self.push(item);
-    }
-}
-
-impl XePush<XeValue> for XeValue {
-    fn xe_push(&mut self, item: XeValue) {
-        xe_val_push(self, item);
-    }
-}
-
-trait XePop {
-    type Item;
-    fn xe_pop(&mut self) -> Self::Item;
-}
-
-impl<T> XePop for Vec<T> {
-    type Item = T;
-    fn xe_pop(&mut self) -> Self::Item {
-        self.pop().unwrap_or_else(|| xe_runtime_error("pop() called on empty list"))
-    }
-}
-
-impl XePop for XeValue {
-    type Item = XeValue;
-    fn xe_pop(&mut self) -> Self::Item {
-        xe_val_pop(self)
-    }
-}
-
-fn xe_builtin_keys(target: &XeValue) -> Vec<String> {
-    match target {
-        XeValue::Map(m) => {
-            let mut keys = m.keys().cloned().collect::<Vec<_>>();
-            keys.sort();
-            keys
-        }
-        XeValue::Struct { fields, .. } => {
-            let mut keys = fields.keys().cloned().collect::<Vec<_>>();
-            keys.sort();
-            keys
-        }
-        _ => xe_runtime_error(&format!("keys() expected map or struct, got {}", target.type_name())),
-    }
-}
-
-fn xe_builtin_values(target: &XeValue) -> Vec<XeValue> {
-    match target {
-        XeValue::Map(m) => {
-            let mut pairs = m.iter().collect::<Vec<_>>();
-            pairs.sort_by_key(|(k, _)| (*k).clone());
-            pairs.into_iter().map(|(_, v)| v.clone()).collect()
-        }
-        XeValue::Struct { fields, .. } => {
-            let mut pairs = fields.iter().collect::<Vec<_>>();
-            pairs.sort_by_key(|(k, _)| (*k).clone());
-            pairs.into_iter().map(|(_, v)| v.clone()).collect()
-        }
-        _ => xe_runtime_error(&format!("values() expected map or struct, got {}", target.type_name())),
-    }
-}
-
-fn xe_builtin_has_key(target: &XeValue, key: &XeValue) -> bool {
-    match target {
-        XeValue::Map(m) => m.contains_key(&key.to_string()),
-        XeValue::Struct { fields, .. } => fields.contains_key(&key.to_string()),
-        _ => false,
-    }
-}
-
-fn xe_builtin_contains(target: &XeValue, item: &XeValue) -> bool {
-    match target {
-        XeValue::List(l) => l.iter().any(|v| xe_eq(v, item)),
-        XeValue::Text(s) => s.contains(&item.to_string()),
-        XeValue::Map(m) => m.contains_key(&item.to_string()),
-        _ => false,
-    }
-}
-
-fn xe_builtin_split(text: &str, delim: &str) -> Vec<String> {
-    text.split(delim).map(|part| part.to_string()).collect()
-}
-
-fn xe_builtin_join(list: &[XeValue], delim: &str) -> String {
-    list.iter().map(|item| item.to_string()).collect::<Vec<_>>().join(delim)
-}
-
-fn xe_iter(value: &XeValue) -> Vec<XeValue> {
-    match value {
-        XeValue::List(items) => items.clone(),
-        XeValue::Text(s) => s.chars().map(|c| XeValue::Text(c.to_string())).collect(),
-        XeValue::Map(m) => {
-            let mut keys = m.keys().cloned().map(XeValue::Text).collect::<Vec<_>>();
-            keys.sort_by_key(|k| k.to_string());
-            keys
-        }
-        XeValue::Struct { fields, .. } => {
-            let mut keys = fields.keys().cloned().map(XeValue::Text).collect::<Vec<_>>();
-            keys.sort_by_key(|k| k.to_string());
-            keys
-        }
-        _ => xe_runtime_error(&format!(
-            "for-loop iteration expected text, list, map, or struct, got {}",
-            value.type_name()
-        )),
-    }
-}
-
-type XeGlobal<T> = std::thread::LocalKey<std::cell::RefCell<Option<T>>>;
-
-fn xe_unassigned(name: &str) -> ! {
-    xe_runtime_error(&format!("variable '{}' was used before it was assigned", name))
-}
-
-fn xe_gget<T: Clone + 'static>(key: &'static XeGlobal<T>, name: &str) -> T {
-    key.with(|cell| match &*cell.borrow() {
-        Some(value) => value.clone(),
-        None => xe_unassigned(name),
-    })
-}
-
-fn xe_gwith<T: 'static, R>(key: &'static XeGlobal<T>, name: &str, f: impl FnOnce(&T) -> R) -> R {
-    key.with(|cell| match &*cell.borrow() {
-        Some(value) => f(value),
-        None => xe_unassigned(name),
-    })
-}
-
-fn xe_gset<T: 'static>(key: &'static XeGlobal<T>, value: T) {
-    key.with(|cell| *cell.borrow_mut() = Some(value));
-}
-
-fn xe_gmut<T: 'static, R>(key: &'static XeGlobal<T>, name: &str, f: impl FnOnce(&mut T) -> R) -> R {
-    key.with(|cell| match &mut *cell.borrow_mut() {
-        Some(value) => f(value),
-        None => xe_unassigned(name),
-    })
-}
-
-fn xe_vec_slot<T>(list: &mut Vec<T>, idx: f64) -> &mut T {
-    let i = xe_index_check(idx);
-    let len = list.len();
-    if i >= len {
-        xe_runtime_error(&format!("list index {} out of bounds", i));
-    }
-    &mut list[i]
-}
-
-fn xe_dyn_slot<'a>(obj: &'a mut XeValue, key: &XeValue) -> &'a mut XeValue {
-    match obj {
-        XeValue::List(l) => {
-            let i = xe_index_check(key.as_f64());
-            let len = l.len();
-            if i >= len {
-                xe_runtime_error(&format!("list index {} out of bounds", i));
-            }
-            &mut l[i]
-        }
-        XeValue::Map(m) => {
-            let k = key.to_string();
-            match m.get_mut(&k) {
-                Some(value) => value,
-                None => xe_runtime_error(&format!("key '{}' not found in map", k)),
-            }
-        }
-        XeValue::Struct { name, fields } => {
-            let k = key.to_string();
-            match fields.get_mut(&k) {
-                Some(value) => value,
-                None => xe_runtime_error(&format!("struct '{}' has no field '{}'", name, k)),
-            }
-        }
-        other => xe_runtime_error(&format!(
-            "index access expected list, map, or struct, got {}",
-            other.type_name()
-        )),
-    }
-}
-
-fn xe_field_slot<'a>(obj: &'a mut XeValue, field: &str) -> &'a mut XeValue {
-    match obj {
-        XeValue::Struct { name, fields } => match fields.get_mut(field) {
-            Some(value) => value,
-            None => xe_runtime_error(&format!("struct '{}' has no field '{}'", name, field)),
-        },
-        XeValue::Map(m) => match m.get_mut(field) {
-            Some(value) => value,
-            None => xe_runtime_error(&format!("map has no field '{}'", field)),
-        },
-        other => xe_runtime_error(&format!(
-            "cannot access field '{}' on {}",
-            field,
-            other.type_name()
-        )),
-    }
-}
-
-"#;

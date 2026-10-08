@@ -61,7 +61,7 @@ items = [1, "text", true]
 print(items)
 "#,
     );
-    assert_eq!(result.unwrap(), "[1, text, true]");
+    assert_eq!(result.unwrap(), "[1, \"text\", true]");
 }
 
 #[test]

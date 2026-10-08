@@ -29,135 +29,116 @@ impl Parser {
     fn parse_statement(&mut self) -> XeResult<Statement> {
         let span = self.current_span();
 
-        if self.check(&TokenKind::Import) {
-            return self.parse_import_statement();
-        }
-
-        if self.check(&TokenKind::From) {
-            return self.parse_from_import_statement();
-        }
-
-        // Function definition
-        if self.check(&TokenKind::Function) {
-            return self.parse_function_def();
-        }
-
-        // If statement
-        if self.check(&TokenKind::If) {
-            return self.parse_if_statement();
-        }
-
-        // While loop
-        if self.check(&TokenKind::While) {
-            return self.parse_while_statement();
-        }
-
-        // Repeat loop
-        if self.check(&TokenKind::Repeat) {
-            return self.parse_repeat_statement();
-        }
-
-        // For loop
-        if self.check(&TokenKind::For) {
-            return self.parse_for_statement();
-        }
-
-        // Return statement
-        if self.check(&TokenKind::Return) {
-            return self.parse_return_statement();
-        }
-
-        if self.check(&TokenKind::Break) {
-            self.advance();
-            self.expect_statement_end()?;
-            return Ok(Statement {
-                kind: StatementKind::Break,
-                span,
-            });
-        }
-
-        if self.check(&TokenKind::Continue) {
-            self.advance();
-            self.expect_statement_end()?;
-            return Ok(Statement {
-                kind: StatementKind::Continue,
-                span,
-            });
-        }
-
-        if self.check(&TokenKind::Global) {
-            self.advance();
-            let mut names = vec![self.expect_identifier()?];
-            while self.match_token(&TokenKind::Comma) {
-                names.push(self.expect_identifier()?);
+        match self.peek_kind() {
+            TokenKind::Import => return self.parse_import_statement(),
+            TokenKind::From => return self.parse_from_import_statement(),
+            TokenKind::Function => return self.parse_function_def(),
+            TokenKind::If => return self.parse_if_like_statement(TokenKind::If),
+            TokenKind::While => return self.parse_while_statement(),
+            TokenKind::Repeat => return self.parse_repeat_statement(),
+            TokenKind::For => return self.parse_for_statement(),
+            TokenKind::Return => return self.parse_return_statement(),
+            TokenKind::Struct => return self.parse_struct_def(),
+            TokenKind::Try => return self.parse_try_statement(),
+            TokenKind::Break | TokenKind::Continue | TokenKind::Pass => {
+                let kind = match self.peek_kind() {
+                    TokenKind::Break => StatementKind::Break,
+                    TokenKind::Continue => StatementKind::Continue,
+                    _ => StatementKind::Pass,
+                };
+                self.advance();
+                self.expect_statement_end()?;
+                return Ok(Statement { kind, span });
             }
-            self.expect_statement_end()?;
-            return Ok(Statement {
-                kind: StatementKind::Global { names },
-                span,
-            });
+            TokenKind::Global => {
+                self.advance();
+                let mut names = vec![self.expect_identifier()?];
+                while self.match_token(&TokenKind::Comma) {
+                    names.push(self.expect_identifier()?);
+                }
+                self.expect_statement_end()?;
+                return Ok(Statement {
+                    kind: StatementKind::Global { names },
+                    span,
+                });
+            }
+            _ => {}
         }
 
-        // Struct definition
-        if self.check(&TokenKind::Struct) {
-            return self.parse_struct_def();
-        }
-
-        // Assignment or expression statement
+        // Assignment, augmented assignment, or expression statement
         let expr = self.parse_expression()?;
-        if self.match_token(&TokenKind::Equal) {
-            let value = self.parse_expression()?;
-            self.expect_statement_end()?;
-            match expr.kind {
-                ExpressionKind::Identifier(name) => {
-                    return Ok(Statement {
-                        kind: StatementKind::Assignment { name, value },
-                        span,
-                    });
-                }
-                ExpressionKind::Index { object, index } => {
-                    return Ok(Statement {
-                        kind: StatementKind::IndexAssignment {
-                            object: *object,
-                            index: *index,
-                            value,
-                        },
-                        span,
-                    });
-                }
-                ExpressionKind::FieldAccess { object, field } => {
-                    return Ok(Statement {
-                        kind: StatementKind::FieldAssignment {
-                            object: *object,
-                            field,
-                            value,
-                        },
-                        span,
-                    });
-                }
-                _ => {
-                    return Err(XeError::new(
-                        XeErrorKind::ExpectedToken("valid assignment target".to_string()),
-                        Some(span),
-                    ));
-                }
-            }
-        }
 
+        let op = match self.peek_kind() {
+            TokenKind::Equal => None,
+            kind => match augmented_operator(kind) {
+                Some(op) => Some(op),
+                None => {
+                    self.expect_statement_end()?;
+                    return Ok(Statement {
+                        kind: StatementKind::Expression(expr),
+                        span,
+                    });
+                }
+            },
+        };
+        self.advance(); // consume '=' or 'op='
+        let value = self.parse_expression()?;
         self.expect_statement_end()?;
-        Ok(Statement {
-            kind: StatementKind::Expression(expr),
-            span,
-        })
+
+        let kind = match expr.kind {
+            ExpressionKind::Identifier(name) => {
+                let value = match op {
+                    // `x op= v` is `x = x op v`; reading a variable has no side effects.
+                    Some(op) => Expression {
+                        span: value.span.clone(),
+                        kind: ExpressionKind::BinaryOp {
+                            left: Box::new(Expression {
+                                kind: ExpressionKind::Identifier(name.clone()),
+                                span: expr.span.clone(),
+                            }),
+                            op,
+                            right: Box::new(value),
+                        },
+                    },
+                    None => value,
+                };
+                StatementKind::Assignment { name, value }
+            }
+            ExpressionKind::Index { object, index } => StatementKind::IndexAssignment {
+                object: *object,
+                index: *index,
+                value,
+                op,
+            },
+            ExpressionKind::FieldAccess { object, field } => StatementKind::FieldAssignment {
+                object: *object,
+                field,
+                value,
+                op,
+            },
+            _ => {
+                return Err(XeError::new(
+                    XeErrorKind::ExpectedToken("valid assignment target".to_string()),
+                    Some(span),
+                ));
+            }
+        };
+
+        Ok(Statement { kind, span })
     }
 
     fn parse_import_statement(&mut self) -> XeResult<Statement> {
         let span = self.current_span();
         self.advance(); // consume 'import'
         let module = self.parse_module_path()?;
+        let alias = if self.match_token(&TokenKind::As) {
+            Some(self.expect_identifier()?)
+        } else {
+            None
+        };
         self.expect_statement_end()?;
         Ok(Statement {
-            kind: StatementKind::Import { module },
+            kind: StatementKind::Import { module, alias },
             span,
         })
     }
@@ -168,9 +149,9 @@ impl Parser {
         let module = self.parse_module_path()?;
         self.expect(&TokenKind::Import)?;
 
-        let mut names = vec![self.expect_identifier()?];
+        let mut names = vec![self.parse_import_name()?];
         while self.match_token(&TokenKind::Comma) {
-            names.push(self.expect_identifier()?);
+            names.push(self.parse_import_name()?);
         }
 
         self.expect_statement_end()?;
@@ -178,6 +159,16 @@ impl Parser {
             kind: StatementKind::FromImport { module, names },
             span,
         })
+    }
+
+    fn parse_import_name(&mut self) -> XeResult<(String, String)> {
+        let name = self.expect_identifier()?;
+        let local = if self.match_token(&TokenKind::As) {
+            self.expect_identifier()?
+        } else {
+            name.clone()
+        };
+        Ok((name, local))
     }
 
     fn parse_function_def(&mut self) -> XeResult<Statement> {
@@ -230,10 +221,6 @@ impl Parser {
             kind: StatementKind::StructDef { name, fields },
             span,
         })
-    }
-
-    fn parse_if_statement(&mut self) -> XeResult<Statement> {
-        self.parse_if_like_statement(TokenKind::If)
     }
 
     fn parse_if_like_statement(&mut self, keyword: TokenKind) -> XeResult<Statement> {
@@ -323,11 +310,41 @@ impl Parser {
         })
     }
 
+    fn parse_try_statement(&mut self) -> XeResult<Statement> {
+        let span = self.current_span();
+        self.advance(); // consume 'try'
+        self.expect(&TokenKind::Colon)?;
+        self.expect_newline()?;
+        let body = self.parse_block()?;
+
+        self.expect(&TokenKind::Catch)?;
+        let catch_variable = if self.check(&TokenKind::Colon) {
+            None
+        } else {
+            Some(self.expect_identifier()?)
+        };
+        self.expect(&TokenKind::Colon)?;
+        self.expect_newline()?;
+        let handler = self.parse_block()?;
+
+        Ok(Statement {
+            kind: StatementKind::Try {
+                body,
+                catch_variable,
+                handler,
+            },
+            span,
+        })
+    }
+
     fn parse_return_statement(&mut self) -> XeResult<Statement> {
         let span = self.current_span();
         self.advance(); // consume 'return'
 
-        let value = if !self.check(&TokenKind::Newline) && !self.is_at_end() {
+        let value = if !self.check(&TokenKind::Newline)
+            && !self.check(&TokenKind::Dedent)
+            && !self.is_at_end()
+        {
             Some(self.parse_expression()?)
         } else {
             None
@@ -361,21 +378,54 @@ impl Parser {
     }
 
     fn parse_expression(&mut self) -> XeResult<Expression> {
+        if self.check(&TokenKind::Lambda) {
+            return self.parse_lambda();
+        }
         self.parse_binary_expression(0)
     }
 
-    fn parse_binary_expression(&mut self, min_precedence: u8) -> XeResult<Expression> {
-        let mut left = self.parse_unary_expression()?;
+    fn parse_lambda(&mut self) -> XeResult<Expression> {
+        let span = self.current_span();
+        self.advance(); // consume 'lambda'
 
-        while let Some(op) = self.peek_binary_operator() {
+        let mut params = Vec::new();
+        if !self.check(&TokenKind::Colon) {
+            params.push(self.expect_identifier()?);
+            while self.match_token(&TokenKind::Comma) {
+                params.push(self.expect_identifier()?);
+            }
+        }
+        self.expect(&TokenKind::Colon)?;
+        let body = self.parse_expression()?;
+
+        Ok(Expression {
+            kind: ExpressionKind::Lambda {
+                params,
+                body: Box::new(body),
+            },
+            span,
+        })
+    }
+
+    fn parse_binary_expression(&mut self, min_precedence: u8) -> XeResult<Expression> {
+        let mut left = self.parse_prefix_expression()?;
+
+        while let Some((op, token_count)) = self.peek_binary_operator() {
             let precedence = op.precedence();
             if precedence < min_precedence {
                 break;
             }
 
-            self.advance(); // consume operator
+            for _ in 0..token_count {
+                self.advance();
+            }
 
-            let right = self.parse_binary_expression(precedence + 1)?;
+            let next_precedence = if op.is_right_associative() {
+                precedence
+            } else {
+                precedence + 1
+            };
+            let right = self.parse_binary_expression(next_precedence)?;
             let span = left.span.clone();
 
             left = Expression {
@@ -391,34 +441,25 @@ impl Parser {
         Ok(left)
     }
 
-    fn parse_unary_expression(&mut self) -> XeResult<Expression> {
+    fn parse_prefix_expression(&mut self) -> XeResult<Expression> {
         let span = self.current_span();
 
-        if self.check(&TokenKind::Minus) {
-            self.advance();
-            let operand = self.parse_unary_expression()?;
-            return Ok(Expression {
-                kind: ExpressionKind::UnaryOp {
-                    op: UnaryOperator::Negate,
-                    operand: Box::new(operand),
-                },
-                span,
-            });
-        }
-
-        if self.check(&TokenKind::Not) {
-            self.advance();
-            let operand = self.parse_unary_expression()?;
-            return Ok(Expression {
-                kind: ExpressionKind::UnaryOp {
-                    op: UnaryOperator::Not,
-                    operand: Box::new(operand),
-                },
-                span,
-            });
-        }
-
-        self.parse_postfix_expression()
+        // `not` binds looser than comparisons (`not a == b` is `not (a == b)`), and
+        // unary minus binds looser than `**` (`-2 ** 2` is `-(2 ** 2)`), as in Python.
+        let (op, operand_precedence) = match self.peek_kind() {
+            TokenKind::Not => (UnaryOperator::Not, NOT_PRECEDENCE),
+            TokenKind::Minus => (UnaryOperator::Negate, NEGATE_PRECEDENCE),
+            _ => return self.parse_postfix_expression(),
+        };
+        self.advance();
+        let operand = self.parse_binary_expression(operand_precedence)?;
+        Ok(Expression {
+            kind: ExpressionKind::UnaryOp {
+                op,
+                operand: Box::new(operand),
+            },
+            span,
+        })
     }
 
     fn parse_postfix_expression(&mut self) -> XeResult<Expression> {
@@ -426,35 +467,62 @@ impl Parser {
 
         loop {
             if self.check(&TokenKind::LeftParen) {
-                // Function call
-                if let ExpressionKind::Identifier(name) = &expr.kind {
-                    let name = name.clone();
-                    let span = expr.span.clone();
-                    self.advance(); // consume (
-                    let args = self.parse_arguments()?;
-                    self.expect(&TokenKind::RightParen)?;
-                    expr = Expression {
-                        kind: ExpressionKind::FunctionCall { name, args },
-                        span,
-                    };
-                } else {
-                    break;
-                }
+                let span = expr.span.clone();
+                self.advance(); // consume (
+                let args = self.parse_arguments()?;
+                self.expect(&TokenKind::RightParen)?;
+                let kind = match expr.kind {
+                    ExpressionKind::Identifier(name) => ExpressionKind::FunctionCall { name, args },
+                    ExpressionKind::FieldAccess { object, field } => ExpressionKind::MethodCall {
+                        object,
+                        method: field,
+                        args,
+                    },
+                    kind => ExpressionKind::Call {
+                        callee: Box::new(Expression {
+                            kind,
+                            span: span.clone(),
+                        }),
+                        args,
+                    },
+                };
+                expr = Expression { kind, span };
             } else if self.check(&TokenKind::LeftBracket) {
-                // Index access
                 let span = expr.span.clone();
                 self.advance(); // consume [
-                let index = self.parse_expression()?;
-                self.expect(&TokenKind::RightBracket)?;
-                expr = Expression {
-                    kind: ExpressionKind::Index {
-                        object: Box::new(expr),
-                        index: Box::new(index),
-                    },
-                    span,
+                let start = if self.check(&TokenKind::Colon) {
+                    None
+                } else {
+                    Some(self.parse_expression()?)
                 };
+                let kind = if self.match_token(&TokenKind::Colon) {
+                    let end = if self.check(&TokenKind::RightBracket) {
+                        None
+                    } else {
+                        Some(Box::new(self.parse_expression()?))
+                    };
+                    ExpressionKind::Slice {
+                        object: Box::new(expr),
+                        start: start.map(Box::new),
+                        end,
+                    }
+                } else {
+                    match start {
+                        Some(index) => ExpressionKind::Index {
+                            object: Box::new(expr),
+                            index: Box::new(index),
+                        },
+                        None => {
+                            return Err(XeError::new(
+                                XeErrorKind::ExpectedExpression,
+                                Some(self.current_span()),
+                            ))
+                        }
+                    }
+                };
+                self.expect(&TokenKind::RightBracket)?;
+                expr = Expression { kind, span };
             } else if self.check(&TokenKind::Dot) {
-                // Field access
                 let span = expr.span.clone();
                 self.advance(); // consume .
                 let field = self.expect_identifier()?;
@@ -476,71 +544,41 @@ impl Parser {
     fn parse_primary(&mut self) -> XeResult<Expression> {
         let span = self.current_span();
 
-        match self.peek_kind() {
-            TokenKind::Number(n) => {
-                let n = *n;
-                self.advance();
-                Ok(Expression {
-                    kind: ExpressionKind::Number(n),
-                    span,
-                })
-            }
-            TokenKind::String(s) => {
-                let s = s.clone();
-                self.advance();
-                Ok(Expression {
-                    kind: ExpressionKind::String(s),
-                    span,
-                })
-            }
-            TokenKind::True => {
-                self.advance();
-                Ok(Expression {
-                    kind: ExpressionKind::Boolean(true),
-                    span,
-                })
-            }
-            TokenKind::False => {
-                self.advance();
-                Ok(Expression {
-                    kind: ExpressionKind::Boolean(false),
-                    span,
-                })
-            }
-            TokenKind::Identifier(name) => {
-                let name = name.clone();
-                self.advance();
-                Ok(Expression {
-                    kind: ExpressionKind::Identifier(name),
-                    span,
-                })
-            }
+        let kind = match self.peek_kind() {
+            TokenKind::Number(n) => ExpressionKind::Number(*n),
+            TokenKind::String(s) => ExpressionKind::String(s.clone()),
+            TokenKind::True => ExpressionKind::Boolean(true),
+            TokenKind::False => ExpressionKind::Boolean(false),
+            TokenKind::None => ExpressionKind::None,
+            TokenKind::Identifier(name) => ExpressionKind::Identifier(name.clone()),
             TokenKind::LeftParen => {
                 self.advance();
                 let expr = self.parse_expression()?;
                 self.expect(&TokenKind::RightParen)?;
-                Ok(expr)
+                return Ok(expr);
             }
             TokenKind::LeftBracket => {
                 self.advance();
                 let elements = self.parse_list_elements()?;
                 self.expect(&TokenKind::RightBracket)?;
-                Ok(Expression {
+                return Ok(Expression {
                     kind: ExpressionKind::List(elements),
                     span,
-                })
+                });
             }
             TokenKind::LeftBrace => {
                 self.advance();
                 let entries = self.parse_map_entries()?;
                 self.expect(&TokenKind::RightBrace)?;
-                Ok(Expression {
+                return Ok(Expression {
                     kind: ExpressionKind::Map(entries),
                     span,
-                })
+                });
             }
-            _ => Err(XeError::new(XeErrorKind::ExpectedExpression, Some(span))),
-        }
+            _ => return Err(XeError::new(XeErrorKind::ExpectedExpression, Some(span))),
+        };
+        self.advance();
+        Ok(Expression { kind, span })
     }
 
     fn parse_arguments(&mut self) -> XeResult<Vec<Expression>> {
@@ -573,7 +611,6 @@ impl Parser {
 
     fn parse_map_entries(&mut self) -> XeResult<Vec<(Expression, Expression)>> {
         let mut entries = Vec::new();
-        while self.match_token(&TokenKind::Newline) {}
         if !self.check(&TokenKind::RightBrace) {
             let key = self.parse_expression()?;
             self.expect(&TokenKind::Colon)?;
@@ -581,7 +618,6 @@ impl Parser {
             entries.push((key, value));
 
             while self.match_token(&TokenKind::Comma) {
-                while self.match_token(&TokenKind::Newline) {}
                 if self.check(&TokenKind::RightBrace) {
                     break;
                 }
@@ -591,7 +627,6 @@ impl Parser {
                 entries.push((key, value));
             }
         }
-        while self.match_token(&TokenKind::Newline) {}
         Ok(entries)
     }
 
@@ -603,23 +638,31 @@ impl Parser {
         Ok(ModulePath { segments })
     }
 
-    fn peek_binary_operator(&self) -> Option<BinaryOperator> {
-        match self.peek_kind() {
-            TokenKind::Plus => Some(BinaryOperator::Add),
-            TokenKind::Minus => Some(BinaryOperator::Subtract),
-            TokenKind::Star => Some(BinaryOperator::Multiply),
-            TokenKind::Slash => Some(BinaryOperator::Divide),
-            TokenKind::Percent => Some(BinaryOperator::Modulo),
-            TokenKind::EqualEqual => Some(BinaryOperator::Equal),
-            TokenKind::NotEqual => Some(BinaryOperator::NotEqual),
-            TokenKind::Less => Some(BinaryOperator::Less),
-            TokenKind::Greater => Some(BinaryOperator::Greater),
-            TokenKind::LessEqual => Some(BinaryOperator::LessEqual),
-            TokenKind::GreaterEqual => Some(BinaryOperator::GreaterEqual),
-            TokenKind::And => Some(BinaryOperator::And),
-            TokenKind::Or => Some(BinaryOperator::Or),
-            _ => None,
-        }
+    /// The binary operator at the current position and how many tokens it spans.
+    fn peek_binary_operator(&self) -> Option<(BinaryOperator, usize)> {
+        let op = match self.peek_kind() {
+            TokenKind::Plus => BinaryOperator::Add,
+            TokenKind::Minus => BinaryOperator::Subtract,
+            TokenKind::Star => BinaryOperator::Multiply,
+            TokenKind::Slash => BinaryOperator::Divide,
+            TokenKind::SlashSlash => BinaryOperator::FloorDivide,
+            TokenKind::Percent => BinaryOperator::Modulo,
+            TokenKind::StarStar => BinaryOperator::Power,
+            TokenKind::EqualEqual => BinaryOperator::Equal,
+            TokenKind::NotEqual => BinaryOperator::NotEqual,
+            TokenKind::Less => BinaryOperator::Less,
+            TokenKind::Greater => BinaryOperator::Greater,
+            TokenKind::LessEqual => BinaryOperator::LessEqual,
+            TokenKind::GreaterEqual => BinaryOperator::GreaterEqual,
+            TokenKind::In => BinaryOperator::In,
+            TokenKind::Not if self.peek_next_kind() == Some(&TokenKind::In) => {
+                return Some((BinaryOperator::NotIn, 2));
+            }
+            TokenKind::And => BinaryOperator::And,
+            TokenKind::Or => BinaryOperator::Or,
+            _ => return None,
+        };
+        Some((op, 1))
     }
 
     // Helper methods
@@ -632,7 +675,6 @@ impl Parser {
         self.peek().map(|t| &t.kind).unwrap_or(&TokenKind::Eof)
     }
 
-    #[allow(dead_code)]
     fn peek_next_kind(&self) -> Option<&TokenKind> {
         self.tokens.get(self.pos + 1).map(|t| &t.kind)
     }
@@ -729,6 +771,19 @@ impl Parser {
     }
 }
 
+fn augmented_operator(kind: &TokenKind) -> Option<BinaryOperator> {
+    Some(match kind {
+        TokenKind::PlusEqual => BinaryOperator::Add,
+        TokenKind::MinusEqual => BinaryOperator::Subtract,
+        TokenKind::StarEqual => BinaryOperator::Multiply,
+        TokenKind::SlashEqual => BinaryOperator::Divide,
+        TokenKind::SlashSlashEqual => BinaryOperator::FloorDivide,
+        TokenKind::PercentEqual => BinaryOperator::Modulo,
+        TokenKind::StarStarEqual => BinaryOperator::Power,
+        _ => return None,
+    })
+}
+
 fn format_token_kind(kind: &TokenKind) -> &'static str {
     match kind {
         TokenKind::Number(_) => "number",
@@ -755,11 +810,26 @@ fn format_token_kind(kind: &TokenKind) -> &'static str {
         TokenKind::From => "from",
         TokenKind::Struct => "struct",
         TokenKind::Global => "global",
+        TokenKind::None => "none",
+        TokenKind::Pass => "pass",
+        TokenKind::Try => "try",
+        TokenKind::Catch => "catch",
+        TokenKind::Lambda => "lambda",
+        TokenKind::As => "as",
         TokenKind::Plus => "+",
         TokenKind::Minus => "-",
         TokenKind::Star => "*",
         TokenKind::Slash => "/",
         TokenKind::Percent => "%",
+        TokenKind::StarStar => "**",
+        TokenKind::SlashSlash => "//",
+        TokenKind::PlusEqual => "+=",
+        TokenKind::MinusEqual => "-=",
+        TokenKind::StarEqual => "*=",
+        TokenKind::SlashEqual => "/=",
+        TokenKind::SlashSlashEqual => "//=",
+        TokenKind::PercentEqual => "%=",
+        TokenKind::StarStarEqual => "**=",
         TokenKind::Equal => "=",
         TokenKind::EqualEqual => "==",
         TokenKind::NotEqual => "!=",
@@ -782,4 +852,3 @@ fn format_token_kind(kind: &TokenKind) -> &'static str {
         TokenKind::Eof => "end of file",
     }
 }
-
