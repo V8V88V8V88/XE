@@ -25,7 +25,7 @@
 
 **XE** is an expressive, indentation-based programming language built for developers who want the clean readability of Python with the execution speed and standalone binary output of native code. 
 
-XE compiles source files directly to optimized Rust, leveraging `rustc` and LLVM for native code generation, zero-overhead memory management, and cross-platform compilation.
+XE compiles source files to Rust and builds them with `rustc` and LLVM into standalone native executables.
 
 ```xe
 # Quick look at XE syntax
@@ -38,7 +38,7 @@ fun main():
     limit = 10
     print("Fibonacci sequence up to", limit)
     
-    for i in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]:
+    for i in range(limit + 1):
         print("fib(" + convert(i, "text") + ") =", fibonacci(i))
 
 main()
@@ -48,13 +48,13 @@ main()
 
 ## Key Features
 
-- **Native Performance**: Compiles down to native machine code via Rust with zero interpreter overhead.
-- **Pythonic Syntax**: Clean indentation-based block syntax (`fun`, `if`, `elif`, `else`, `while`, `for`, `repeat`).
-- **Hybrid Typed IR**: Automatically infers and uses native unboxed types (`f64`, `bool`, `String`, vector slices) for maximum throughput.
-- **Multi-File Modules**: Seamless project organization with relative imports (`import math_utils`, `from helpers import format_name`).
-- **Lexical Scoping**: Function-local variables, parameter shadowing, and global state management.
-- **Rich Diagnostics**: Actionable compiler errors with exact source line snippets and column caret pointers.
-- **Built-in CLI**: Single tool for running, compiling, installing, and self-updating.
+- **Native Performance**: Compiles to native machine code via Rust; no interpreter.
+- **Pythonic Syntax and Semantics**: Indentation-based blocks, Python-style scoping, shared lists and maps, `try`/`catch`, `lambda`, slicing and `+=`.
+- **Type Inference**: Numbers, text and booleans with known types, including function parameters and return values, compile to native `f64`, `String` and `bool`.
+- **Multi-File Modules**: Namespaced imports (`import geometry`, `geometry.area(...)`) and `from helpers import format_name`.
+- **Batteries Included**: Built-ins for text, lists, maps, math, files and command-line arguments.
+- **Rich Diagnostics**: Compiler and runtime errors show the file, line and source line.
+- **Built-in CLI**: One tool for running (with a build cache), compiling, installing and self-updating.
 
 ---
 
@@ -125,9 +125,9 @@ graph LR
 
 1. **Lexer (`lexer.rs`)**: Scans tokens, indentation levels, and source spans.
 2. **Parser (`parser.rs`)**: Validates grammar and builds the Abstract Syntax Tree (AST).
-3. **Semantic Analyzer (`semantic.rs`)**: Enforces variable definitions, module boundaries, and control flow rules.
-4. **Compiler Linker (`compiler.rs`)**: Resolves module dependency graphs and rewrites lexical scopes.
-5. **Codegen (`codegen.rs`)**: Infers native types and generates optimized Rust prelude and functions.
+3. **Compiler Linker (`compiler.rs`)**: Resolves module dependency graphs and resolves names across modules.
+4. **Semantic Analyzer (`semantic.rs`)**: Checks names, scopes and types, and infers native types for function parameters and return values.
+5. **Codegen (`codegen.rs`)**: Generates Rust code on top of the runtime in `runtime/prelude.rs`. Built-in functions are defined once in `builtins.rs`.
 6. **Backend (`rustc`)**: Compiles generated Rust directly to native platform binaries.
 
 ---
@@ -139,11 +139,16 @@ graph LR
 name = "XE"           # Text (String)
 version = 0.1         # Number (f64)
 is_fast = true        # Boolean (bool)
-items = [1, 2, 3, 4]  # List
+items = [1, 2, 3, 4]  # List (shared, like Python)
+user = {"name": "Ada"} # Map
+nothing = none        # None
 ```
 
 ### Control Flow
 ```xe
+score = 85
+count = 3
+
 # If / Elif / Else
 if score >= 90:
     print("Grade: A")
@@ -189,14 +194,14 @@ A reproducible benchmark comparing XE with CPython on a recursive Fibonacci work
 python3 examples/benchmark.py
 ```
 
-Because XE compiles down to native machine code via `rustc`, recursive and computational algorithms run with native CPU speed.
+On a recursive `fib(32)`, XE runs about 15 times faster than CPython (0.013 s vs 0.21 s on the author's machine), because the inferred native types turn it into plain `f64` Rust code.
 
 ---
 
 ## Testing
 
 ```bash
-# Run the full automated test suite (75 tests)
+# Run the full automated test suite
 cargo test
 
 # Run linter checks
@@ -215,12 +220,14 @@ npm run docs:dev
 ## Roadmap
 
 - [x] Multi-file module dependency resolver & linker
-- [x] Hybrid Typed IR with native unboxed type inference
-- [x] Global & local lexical scope shadowing
-- [x] Formatted compiler error diagnostics with source carets
-- [ ] First-class closures and lambda expressions
-- [ ] Standard library expansion (File I/O, OS, Math)
-- [ ] User-defined structs / records
+- [x] Type inference with native types for parameters and return values
+- [x] Python-style scoping, `global`, and shared values
+- [x] Compiler and runtime errors with source locations
+- [x] First-class functions and lambda expressions
+- [x] Standard library: text, lists, maps, math, files, arguments
+- [x] User-defined structs / records
+- [x] `try` / `catch` error handling
+- [ ] List comprehensions
 - [ ] Language Server Protocol (LSP) and VS Code Extension
 
 ---
