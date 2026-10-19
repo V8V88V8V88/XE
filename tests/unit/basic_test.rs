@@ -1984,3 +1984,24 @@ print(fib(20))
     .unwrap();
     assert!(rust_code.contains("fn xe_m0_fib(mut l_n: f64) -> f64"), "{}", rust_code);
 }
+
+#[test]
+fn test_deep_nesting_error() {
+    let cases = [
+        format!("print({}1{})", "(".repeat(20000), ")".repeat(20000)),
+        format!("print({})", vec!["1"; 50000].join("+")),
+        format!("x = {}1{}", "[".repeat(130), "]".repeat(130)),
+        format!("f = {}1", "lambda: ".repeat(130)),
+        format!("print({}1)", "-".repeat(20000)),
+    ];
+    for source in cases {
+        let err = run_xe(&source).unwrap_err();
+        assert!(err.contains("nested too deeply"));
+    }
+}
+
+#[test]
+fn test_moderate_nesting() {
+    let source = format!("print({}1{})", "(".repeat(90), ")".repeat(90));
+    assert_eq!(run_xe(&source).unwrap().trim(), "1");
+}

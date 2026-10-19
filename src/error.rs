@@ -45,6 +45,7 @@ pub enum XeErrorKind {
     ExpectedExpression,
     ExpectedIdentifier,
     InvalidIndentation,
+    NestingTooDeep,
 
     // Semantic errors
     UndefinedVariable(String),
@@ -116,6 +117,7 @@ impl XeError {
             XeErrorKind::ExpectedExpression => "expected expression".to_string(),
             XeErrorKind::ExpectedIdentifier => "expected identifier".to_string(),
             XeErrorKind::InvalidIndentation => "invalid indentation".to_string(),
+            XeErrorKind::NestingTooDeep => "expression nested too deeply".to_string(),
             XeErrorKind::UndefinedVariable(name) => format!("undefined variable '{}'", name),
             XeErrorKind::UndefinedFunction(name) => format!("undefined function '{}'", name),
             XeErrorKind::WrongArgumentCount {
