@@ -5,11 +5,18 @@ use crate::lexer::{Token, TokenKind};
 pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
+    depth: usize,
 }
+
+const MAX_DEPTH: usize = 100;
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens, pos: 0 }
+        Self {
+            tokens,
+            pos: 0,
+            depth: 0,
+        }
     }
 
     pub fn parse(&mut self) -> XeResult<Program> {
@@ -377,11 +384,27 @@ impl Parser {
         Ok(statements)
     }
 
-    fn parse_expression(&mut self) -> XeResult<Expression> {
-        if self.check(&TokenKind::Lambda) {
-            return self.parse_lambda();
+    fn enter(&mut self) -> XeResult<()> {
+        self.depth += 1;
+        if self.depth > MAX_DEPTH {
+            return Err(XeError::new(
+                XeErrorKind::NestingTooDeep,
+                Some(self.current_span()),
+            ));
         }
-        self.parse_binary_expression(0)
+        Ok(())
+    }
+
+    fn parse_expression(&mut self) -> XeResult<Expression> {
+        let saved = self.depth;
+        self.enter()?;
+        let result = if self.check(&TokenKind::Lambda) {
+            self.parse_lambda()
+        } else {
+            self.parse_binary_expression(0)
+        };
+        self.depth = saved;
+        result
     }
 
     fn parse_lambda(&mut self) -> XeResult<Expression> {
@@ -408,6 +431,13 @@ impl Parser {
     }
 
     fn parse_binary_expression(&mut self, min_precedence: u8) -> XeResult<Expression> {
+        let saved = self.depth;
+        let result = self.parse_binary_chain(min_precedence);
+        self.depth = saved;
+        result
+    }
+
+    fn parse_binary_chain(&mut self, min_precedence: u8) -> XeResult<Expression> {
         let mut left = self.parse_prefix_expression()?;
 
         while let Some((op, token_count)) = self.peek_binary_operator() {
@@ -419,6 +449,7 @@ impl Parser {
             for _ in 0..token_count {
                 self.advance();
             }
+            self.enter()?;
 
             let next_precedence = if op.is_right_associative() {
                 precedence
@@ -452,7 +483,11 @@ impl Parser {
             _ => return self.parse_postfix_expression(),
         };
         self.advance();
-        let operand = self.parse_binary_expression(operand_precedence)?;
+        let saved = self.depth;
+        self.enter()?;
+        let operand = self.parse_binary_expression(operand_precedence);
+        self.depth = saved;
+        let operand = operand?;
         Ok(Expression {
             kind: ExpressionKind::UnaryOp {
                 op,
@@ -463,9 +498,22 @@ impl Parser {
     }
 
     fn parse_postfix_expression(&mut self) -> XeResult<Expression> {
+        let saved = self.depth;
+        let result = self.parse_postfix_chain();
+        self.depth = saved;
+        result
+    }
+
+    fn parse_postfix_chain(&mut self) -> XeResult<Expression> {
         let mut expr = self.parse_primary()?;
 
         loop {
+            if self.check(&TokenKind::LeftParen)
+                || self.check(&TokenKind::LeftBracket)
+                || self.check(&TokenKind::Dot)
+            {
+                self.enter()?;
+            }
             if self.check(&TokenKind::LeftParen) {
                 let span = expr.span.clone();
                 self.advance(); // consume (
