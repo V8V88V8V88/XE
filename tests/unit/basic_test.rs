@@ -954,6 +954,83 @@ print("shared")
     assert_eq!(output.trim(), "shared\nA\nB");
 }
 
+/// Runs `main.xe` from a project where `link.xe` is a symlink to `real.xe`.
+#[cfg(unix)]
+fn run_xe_project_with_symlink(files: &[(&str, &str)]) -> Result<String, String> {
+    let id = get_unique_id();
+    let temp_dir = std::env::temp_dir().join(format!("xe_project_symlink_{}", id));
+    let _ = fs::create_dir_all(&temp_dir);
+    write_project_files(&temp_dir, files)?;
+    std::os::unix::fs::symlink("real.xe", temp_dir.join("link.xe")).map_err(|e| e.to_string())?;
+
+    let output = xe_command()
+        .arg("run")
+        .arg(temp_dir.join("main.xe"))
+        .output()
+        .map_err(|e| e.to_string())?;
+
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        Err(String::from_utf8_lossy(&output.stderr).to_string())
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn test_import_through_symlink() {
+    let output = run_xe_project_with_symlink(&[
+        (
+            "main.xe",
+            r#"
+import link
+
+print(link.helper())
+"#,
+        ),
+        (
+            "real.xe",
+            r#"
+fun helper():
+    return 1
+"#,
+        ),
+    ])
+    .unwrap();
+
+    assert_eq!(output.trim(), "1");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_module_reached_directly_and_through_symlink_initializes_once() {
+    let output = run_xe_project_with_symlink(&[
+        (
+            "main.xe",
+            r#"
+import link
+import real
+
+print(link.helper() + real.helper())
+"#,
+        ),
+        (
+            "real.xe",
+            r#"
+print("init")
+
+fun helper():
+    return 1
+"#,
+        ),
+    ])
+    .unwrap();
+
+    assert_eq!(output.trim(), "init\n2");
+}
+
 #[test]
 fn test_compile_mode_builds_runnable_binary_with_imports() {
     let output = compile_and_run_project_binary(

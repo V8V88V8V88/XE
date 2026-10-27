@@ -154,7 +154,7 @@ impl ModuleCompiler {
 
             Ok(ModuleRecord {
                 id: module_id,
-                path: path.to_path_buf(),
+                path: canonical.clone(),
                 program,
                 exports,
                 imports,
@@ -164,10 +164,11 @@ impl ModuleCompiler {
         self.loading_stack.pop();
 
         let module = result?;
-        self.module_ids_by_path.insert(module.path.clone(), module.id);
-        self.modules.insert(module.id, module);
+        let module_id = module.id;
+        self.module_ids_by_path.insert(module.path.clone(), module_id);
+        self.modules.insert(module_id, module);
 
-        Ok(*self.module_ids_by_path.get(&canonical).unwrap())
+        Ok(module_id)
     }
 
     fn parse_program(&self, source: &str, source_name: &str) -> Result<Program, XeError> {
