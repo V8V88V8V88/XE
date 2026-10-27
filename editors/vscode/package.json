@@ -3,7 +3,7 @@
   "displayName": "XE Language",
   "description": "Syntax highlighting, snippets and editor support for the XE programming language.",
   "version": "0.1.0",
-  "publisher": "v8v88v8v88",
+  "publisher": "xe-lang",
   "license": "GPL-3.0-or-later",
   "icon": "images/icon.png",
   "homepage": "https://xe-lang.vercel.app",
