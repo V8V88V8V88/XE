@@ -1612,6 +1612,44 @@ print(p_pos.x, p_pos.y)
     assert_eq!(output, "true\nfalse\ntrue\nAlpha\n10 20\n");
 }
 
+#[test]
+fn test_self_containing_values_compare_without_overflowing() {
+    let code = r#"
+struct Node:
+    value
+    next
+
+a = [1]
+b = [1]
+append(a, b)
+append(b, a)
+print(a == b)
+
+c = [2]
+append(c, a)
+d = [3]
+append(d, b)
+print(c == d)
+
+m1 = {"k": 1}
+m1["self"] = m1
+m2 = {"k": 1}
+m2["self"] = m2
+print(m1 == m2)
+m2["k"] = 2
+print(m1 == m2)
+
+n1 = Node(1, none)
+n1.next = n1
+n2 = Node(1, none)
+n2.next = n2
+print(n1 == n2)
+print(contains([n1], n2))
+"#;
+    let output = run_xe(code).unwrap();
+    assert_eq!(output, "true\nfalse\ntrue\nfalse\ntrue\ntrue\n");
+}
+
 
 
 #[test]

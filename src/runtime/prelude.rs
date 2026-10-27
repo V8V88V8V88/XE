@@ -537,6 +537,23 @@ fn xe_num_eq(a: f64, b: f64) -> bool {
     a == b || (a - b).abs() <= f64::EPSILON * a.abs().max(b.abs()).max(1.0)
 }
 
+thread_local! {
+    /// Container pairs being compared, so self-containing values don't recurse forever.
+    static XE_COMPARING: RefCell<Vec<(usize, usize)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Compares two containers with `body`, unless the same pair is already being compared
+/// further up: then nothing so far tells them apart, so they count as equal.
+fn xe_eq_once(left: usize, right: usize, body: impl FnOnce() -> bool) -> bool {
+    if XE_COMPARING.with(|seen| seen.borrow().contains(&(left, right))) {
+        return true;
+    }
+    XE_COMPARING.with(|seen| seen.borrow_mut().push((left, right)));
+    let result = body();
+    XE_COMPARING.with(|seen| seen.borrow_mut().pop());
+    result
+}
+
 fn xe_eq(left: &XeValue, right: &XeValue) -> bool {
     match (left, right) {
         (XeValue::None, XeValue::None) => true,
@@ -547,29 +564,35 @@ fn xe_eq(left: &XeValue, right: &XeValue) -> bool {
             if Rc::ptr_eq(a, b) {
                 return true;
             }
-            let (a, b) = (a.borrow(), b.borrow());
-            a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| xe_eq(x, y))
+            xe_eq_once(Rc::as_ptr(a) as usize, Rc::as_ptr(b) as usize, || {
+                let (a, b) = (a.borrow(), b.borrow());
+                a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| xe_eq(x, y))
+            })
         }
         (XeValue::Map(a), XeValue::Map(b)) => {
             if Rc::ptr_eq(a, b) {
                 return true;
             }
-            let (a, b) = (a.borrow(), b.borrow());
-            a.len() == b.len()
-                && a.entries
-                    .iter()
-                    .all(|(key, value)| b.get(key).is_some_and(|other| xe_eq(value, other)))
+            xe_eq_once(Rc::as_ptr(a) as usize, Rc::as_ptr(b) as usize, || {
+                let (a, b) = (a.borrow(), b.borrow());
+                a.len() == b.len()
+                    && a.entries
+                        .iter()
+                        .all(|(key, value)| b.get(key).is_some_and(|other| xe_eq(value, other)))
+            })
         }
         (XeValue::Struct(a), XeValue::Struct(b)) => {
             if Rc::ptr_eq(a, b) {
                 return true;
             }
-            let (a, b) = (a.borrow(), b.borrow());
-            a.name == b.name
-                && a.fields.len() == b.fields.len()
-                && a.fields
-                    .iter()
-                    .all(|(name, value)| b.get(name).is_some_and(|other| xe_eq(value, other)))
+            xe_eq_once(Rc::as_ptr(a) as usize, Rc::as_ptr(b) as usize, || {
+                let (a, b) = (a.borrow(), b.borrow());
+                a.name == b.name
+                    && a.fields.len() == b.fields.len()
+                    && a.fields
+                        .iter()
+                        .all(|(name, value)| b.get(name).is_some_and(|other| xe_eq(value, other)))
+            })
         }
         (XeValue::Function(a), XeValue::Function(b)) => Rc::ptr_eq(a, b),
         _ => false,
