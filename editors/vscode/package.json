@@ -1,6 +1,6 @@
 {
-  "name": "xe-lang",
-  "displayName": "XE Language",
+  "name": "xe-language",
+  "displayName": "XE Language Support",
   "description": "Syntax highlighting, snippets and editor support for the XE programming language.",
   "version": "0.1.0",
   "publisher": "xe-lang",
