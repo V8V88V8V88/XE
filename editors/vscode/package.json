@@ -1,0 +1,64 @@
+{
+  "name": "xe-language",
+  "displayName": "XE Lang",
+  "description": "Syntax highlighting, snippets and editor support for the XE programming language.",
+  "version": "0.1.0",
+  "publisher": "xe-lang",
+  "license": "GPL-3.0-or-later",
+  "icon": "images/icon.png",
+  "homepage": "https://xe-lang.vercel.app",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/V8V88V8V88/XE.git",
+    "directory": "editors/vscode"
+  },
+  "bugs": {
+    "url": "https://github.com/V8V88V8V88/XE/issues"
+  },
+  "engines": {
+    "vscode": "^1.79.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets"
+  ],
+  "keywords": [
+    "xe",
+    "xe-lang",
+    "syntax",
+    "highlighting",
+    "transpiler"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "xe",
+        "aliases": [
+          "XE",
+          "xe"
+        ],
+        "extensions": [
+          ".xe"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./images/icon.png",
+          "dark": "./images/icon.png"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "xe",
+        "scopeName": "source.xe",
+        "path": "./syntaxes/xe.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "xe",
+        "path": "./snippets/xe.json"
+      }
+    ]
+  }
+}
