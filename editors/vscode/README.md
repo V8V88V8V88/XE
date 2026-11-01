@@ -28,7 +28,7 @@ curl -fsSL https://xe-lang.vercel.app/install.sh | bash
 xe run hello.xe
 ```
 
-See the [documentation](https://xe-lang.vercel.app/docs) to learn the language.
+See the [documentation](https://xe-lang.vercel.app/guide/getting-started) to learn the language.
 
 ## Issues
 

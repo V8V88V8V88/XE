@@ -13,7 +13,22 @@
   --vp-c-text-2: #4b443b;
   --vp-c-text-3: #6d655a;
   --xe-install-bg: color-mix(in srgb, var(--vp-c-bg-alt), var(--vp-c-bg) 42%);
-  --xe-command-bg: #0a0a09;
+  --xe-command-bg: #fbf8f2;
+  --xe-command-border: rgba(34, 30, 24, 0.14);
+  --xe-command-text: #9a5a22;
+  --xe-pane-divider: rgba(34, 30, 24, 0.1);
+  --xe-pane-label: #7a7062;
+  --xe-copy-bg: rgba(34, 30, 24, 0.04);
+  --xe-copy-hover-bg: rgba(34, 30, 24, 0.08);
+  --xe-copy-hover-text: var(--vp-c-text-1);
+  --xe-code-text: #2a241c;
+  --xe-code-k: #b0541c;
+  --xe-code-f: #7d5512;
+  --xe-code-s: #4a7a28;
+  --xe-code-n: #8a3f9c;
+  --xe-code-muted: #8b8173;
+  --xe-code-out: #4b443b;
+  --xe-code-shadow: 0 20px 50px -28px rgba(60, 40, 20, 0.25);
 }
 
 .dark {
@@ -30,8 +45,23 @@
   --vp-c-text-1: #f3eee3;
   --vp-c-text-2: #d1c5af;
   --vp-c-text-3: #a6977f;
-  --xe-install-bg: #0c0a07;
+  --xe-install-bg: #1a1713;
   --xe-command-bg: color-mix(in srgb, #000000 95.5%, #8e6130 4.5%);
+  --xe-command-border: rgba(255, 255, 255, 0.1);
+  --xe-command-text: var(--vp-c-brand-3);
+  --xe-pane-divider: rgba(255, 255, 255, 0.08);
+  --xe-pane-label: #8f8473;
+  --xe-copy-bg: rgba(255, 255, 255, 0.05);
+  --xe-copy-hover-bg: rgba(255, 255, 255, 0.1);
+  --xe-copy-hover-text: #fff;
+  --xe-code-text: #e9e1d3;
+  --xe-code-k: #e0965a;
+  --xe-code-f: #e9c99b;
+  --xe-code-s: #a8c48a;
+  --xe-code-n: #d7a6e0;
+  --xe-code-muted: #7d7466;
+  --xe-code-out: #b8ad9b;
+  --xe-code-shadow: 0 20px 50px -24px rgba(0, 0, 0, 0.45);
 }
 
 body {
@@ -43,8 +73,7 @@ body {
 }
 
 /* Hash / in-page links: offset fixed VitePress header */
-#install,
-#faq {
+#install {
   scroll-margin-top: 5rem;
 }
 
@@ -62,15 +91,11 @@ body {
   .xe-scroll-down {
     animation: none;
   }
-
-  .xe-faq-answer {
-    transition: none !important;
-  }
 }
 
-/* Standard VitePress Hero Alignment (Fixed) */
+/* Hero: compact so the install box sits right below it */
 .VPHomeHero {
-  padding: 80px 0 20px; /* Added bottom constraint */
+  padding: 48px 0 8px;
   display: flex;
   align-items: center;
 }
@@ -87,9 +112,10 @@ body {
 }
 
 .VPHomeHero .main {
-  flex: 1;
+  flex: 1 1 0;
+  width: auto !important;
+  max-width: 640px !important;
   text-align: left;
-  max-width: 680px;
 }
 
 .VPHomeHero .name {
@@ -103,17 +129,18 @@ body {
 }
 
 .VPHomeHero .text {
-  font-size: clamp(3.2rem, 6vw, 4.8rem);
-  line-height: 1.1;
+  font-size: clamp(2.2rem, 3.8vw, 3.2rem);
+  line-height: 1.08;
   font-weight: 800;
-  letter-spacing: -0.04em;
+  letter-spacing: -0.035em;
   color: var(--vp-c-text-1);
 }
 
 .VPHomeHero .tagline {
-  font-size: 1.2rem;
+  max-width: 34em;
+  font-size: 1.1rem;
   line-height: 1.6;
-  margin-top: 24px;
+  margin-top: 20px;
   color: var(--vp-c-text-2);
 }
 
@@ -158,67 +185,106 @@ body {
   outline-offset: 3px;
 }
 
-/* Original Logo Style with Outer Glow */
+/* Navbar logo mark (transparent, theme-aware) */
+.VPNavBarTitle .logo {
+  height: 20px;
+  width: auto;
+}
+
+/* Hero logo tile with outer glow */
+.VPHomeHero .image {
+  flex: 1 1 0;
+  display: flex;
+  justify-content: center;
+  order: 2;
+  margin: 0 !important;
+}
+
 .VPHomeHero .image-container {
-  width: 320px;
-  height: 320px;
+  width: 300px;
+  height: 300px;
   display: flex;
   align-items: center;
   justify-content: center;
   position: relative;
+  transform: none !important;
+}
+
+.VPHomeHero .image-bg {
+  display: none;
 }
 
 .VPHomeHero .image-src {
-  width: 240px;
-  height: 240px;
+  position: relative;
+  top: auto;
+  left: auto;
+  transform: none;
+  width: 220px;
+  height: 220px;
+  max-width: none;
+  max-height: none;
+  object-fit: cover;
   border-radius: 48px;
   z-index: 1;
-  box-shadow: 
+  box-shadow:
+    0 0 0 1px var(--xe-pane-divider),
     0 30px 60px -12px rgba(0, 0, 0, 0.5),
     0 18px 36px -18px rgba(0, 0, 0, 0.6);
 }
 
-/* Logo Glow Effect */
 .VPHomeHero .image-container::after {
   content: "";
   position: absolute;
-  width: 260px;
-  height: 260px;
+  width: 240px;
+  height: 240px;
   background: var(--vp-c-brand-1);
   filter: blur(80px);
-  opacity: 0.15;
+  opacity: 0.18;
   border-radius: 50%;
   pointer-events: none;
 }
 
 @media (max-width: 960px) {
+  .VPHomeHero {
+    padding-top: 24px;
+  }
   .VPHomeHero .container {
     flex-direction: column !important;
+    gap: 16px;
     text-align: center !important;
     padding: 0 24px;
   }
   .VPHomeHero .main {
     text-align: center !important;
+    order: 2;
   }
   .VPHomeHero .actions {
     justify-content: center !important;
   }
-  .VPHomeHero .image-container {
-    width: 240px;
-    height: 240px;
-    margin-bottom: 24px;
+  .VPHomeHero .image {
+    order: 1;
   }
-  .VPHomeHero .image-src {
+  .VPHomeHero .image-container {
     width: 180px;
     height: 180px;
+  }
+  .VPHomeHero .image-src {
+    width: 132px;
+    height: 132px;
+    border-radius: 30px;
+  }
+  .VPHomeHero .image-container::after {
+    width: 160px;
+    height: 160px;
   }
 }
 
 /* Layout Spacing */
+/* Same 1152px column as the hero, so left/right edges line up */
 .xe-home {
-  max-width: 840px;
-  margin: 40px auto 0; /* Balanced gap from hero buttons */
-  padding: 0 24px;
+  max-width: 1152px;
+  margin: 8px auto 0;
+  padding: 0;
 }
 
 .xe-home section + section {
@@ -247,76 +313,6 @@ body {
     padding-left: 14px !important;
     padding-right: 14px !important;
   }
-}
-
-/* Reverted FAQ Design */
-.xe-faq {
-  padding-bottom: 40px; /* Reduced bottom space */
-}
-
-.xe-faq .xe-section-kicker {
-  text-align: left;
-  margin-bottom: 8px;
-}
-
-.xe-faq .xe-section-title {
-  text-align: left;
-  font-size: 2.2rem;
-  font-weight: 800;
-  margin-bottom: 24px; /* Tighter heading space */
-}
-
-.xe-faq-list {
-  border-top: 1px solid var(--vp-c-divider);
-}
-
-.xe-faq-item {
-  border-bottom: 1px solid var(--vp-c-divider);
-}
-
-.xe-faq-question {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  width: 100%;
-  padding: 24px 0;
-  font-size: 1.15rem;
-  font-weight: 600;
-  font-family: inherit;
-  color: var(--vp-c-text-1);
-  text-align: left;
-  background: none;
-  border: none;
-  cursor: pointer;
-  transition: color 0.2s ease;
-}
-
-.xe-faq-question:hover {
-  color: var(--vp-c-brand-1);
-}
-
-.xe-faq-icon {
-  font-size: 1.4rem;
-  color: var(--vp-c-text-3);
-  margin-left: 16px;
-}
-
-.xe-faq-answer {
-  max-height: 0;
-  overflow: hidden;
-  transition: max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1), padding 0.4s ease;
-}
-
-.xe-faq-active .xe-faq-answer {
-  max-height: 500px;
-  padding-bottom: 24px;
-}
-
-.xe-faq-answer p {
-  margin: 0;
-  font-size: 1.05rem;
-  line-height: 1.7;
-  color: var(--vp-c-text-2);
 }
 
 /* Scroll Reveal */
@@ -365,7 +361,7 @@ body {
 /* Install Bar */
 .xe-install-bar {
   position: relative;
-  padding: 14px 22px;
+  padding: 24px 28px;
   border-radius: 16px;
   background: var(--xe-install-bg);
   border: 1px solid var(--vp-c-border);
@@ -373,6 +369,10 @@ body {
     0 10px 30px rgba(0, 0, 0, 0.03),
     0 4px 8px rgba(0, 0, 0, 0.02);
   overflow: hidden;
+}
+
+.xe-install-note code {
+  white-space: nowrap;
 }
 
 .xe-install-note a {
@@ -394,8 +394,7 @@ body {
 }
 
 .xe-scroll-down:focus-visible,
-.xe-copy-trigger:focus-visible,
-.xe-faq-question:focus-visible {
+.xe-copy-trigger:focus-visible {
   outline: 2px solid var(--vp-c-brand-1);
   outline-offset: 3px;
 }
@@ -403,7 +402,7 @@ body {
 .xe-install-content {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 14px;
   text-align: left;
   position: relative;
   z-index: 2;
@@ -413,7 +412,7 @@ body {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 10px;
+  gap: 8px;
   margin: 0 !important;
   padding: 0 !important;
   border: none !important;
@@ -430,7 +429,7 @@ body {
   font-weight: 850;
   letter-spacing: 0.22em;
   text-transform: uppercase;
-  line-height: 4.25;
+  line-height: 1;
 }
 
 .xe-install-headline {
@@ -452,14 +451,20 @@ body {
   background: var(--xe-command-bg);
   padding: 10px 14px;
   border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--xe-command-border);
   margin: 0;
-  box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.45);
+}
+
+.xe-prompt {
+  color: var(--vp-c-text-3);
+  user-select: none;
 }
 
 .xe-command-box code {
+  background: transparent !important;
+  padding: 0 !important;
   font-family: var(--vp-font-family-mono);
-  color: var(--vp-c-brand-3);
+  color: var(--xe-command-text);
   font-size: 0.95rem;
   overflow-x: auto;
   white-space: nowrap;
@@ -476,8 +481,8 @@ body {
   align-items: center;
   justify-content: center;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: var(--xe-copy-bg);
+  border: 1px solid var(--xe-command-border);
   color: var(--vp-c-text-3);
   cursor: pointer;
   transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
@@ -485,17 +490,19 @@ body {
 }
 
 .xe-copy-trigger:hover {
-  background: rgba(255, 255, 255, 0.1);
-  color: #fff;
+  background: var(--xe-copy-hover-bg);
+  color: var(--xe-copy-hover-text);
 }
 
-.xe-install-note {
+.xe-install-bar .xe-install-note {
   margin: 0;
   color: var(--vp-c-text-3);
-  font-size: 0.78rem;
-  line-height: 1.4;
+  font-size: 0.8rem;
+  line-height: 1.55;
   opacity: 0.9;
 }
+
+
 
 /* Mobile Optimizations */
 /* Scroll Indicator */
@@ -550,7 +557,12 @@ body {
     gap: 8px;
   }
 
-  .xe-command-box code {
+  .xe-prompt {
+  color: var(--vp-c-text-3);
+  user-select: none;
+}
+
+.xe-command-box code {
     font-size: 0.8rem;
   }
 
@@ -559,5 +571,139 @@ body {
     min-height: 44px;
     width: 44px;
     height: 44px;
+  }
+}
+
+/* ---------- Home: code showcase, features ---------- */
+.xe-sr-only {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+}
+
+.xe-window {
+  display: grid;
+  grid-template-columns: 1.15fr 1fr;
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid var(--vp-c-border);
+  background: var(--xe-command-bg);
+  box-shadow: var(--xe-code-shadow);
+}
+
+.xe-pane {
+  min-width: 0;
+}
+
+.xe-pane-term {
+  border-left: 1px solid var(--xe-pane-divider);
+}
+
+.xe-pane-bar {
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--xe-pane-divider);
+}
+
+.xe-pane-name {
+  font-family: var(--vp-font-family-mono);
+  font-size: 0.75rem;
+  color: var(--xe-pane-label);
+}
+
+.vp-doc .xe-code {
+  margin: 0;
+  padding: 18px;
+  overflow-x: auto;
+  background: transparent;
+}
+
+.vp-doc .xe-code code {
+  display: block;
+  padding: 0;
+  background: transparent;
+  font-family: var(--vp-font-family-mono);
+  font-size: 0.88rem;
+  line-height: 1.7;
+  color: var(--xe-code-text);
+  white-space: pre;
+}
+
+.xe-code .k { color: var(--xe-code-k); }
+.xe-code .f { color: var(--xe-code-f); }
+.xe-code .s { color: var(--xe-code-s); }
+.xe-code .n { color: var(--xe-code-n); }
+.xe-code .c,
+.xe-code .p { color: var(--xe-code-muted); }
+.xe-code .o { color: var(--xe-code-out); }
+
+.xe-feature-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 32px;
+}
+
+.vp-doc .xe-feature h3 {
+  margin: 0 0 8px;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--vp-c-text-1);
+}
+
+.vp-doc .xe-feature p {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.6;
+  color: var(--vp-c-text-2);
+}
+
+@media (max-width: 768px) {
+  .xe-window {
+    grid-template-columns: 1fr;
+  }
+  .xe-pane-term {
+    border-left: none;
+    border-top: 1px solid var(--xe-pane-divider);
+  }
+  .vp-doc .xe-code code {
+    font-size: 0.8rem;
+  }
+  .xe-feature-grid {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+}
+
+/* ---------- Docs pages ---------- */
+/* VitePress caps the text column at 688px; give it a little more room on wide screens */
+@media (min-width: 1440px) {
+  .VPDoc.has-aside .content-container {
+    max-width: 760px !important;
+  }
+}
+
+/* Tables: full column width on desktop so every page lines up */
+@media (min-width: 768px) {
+  .vp-doc table {
+    display: table;
+    width: 100%;
+  }
+}
+
+/* Keep code inside tables on one line; narrow screens scroll the table instead */
+.vp-doc td code {
+  white-space: nowrap;
+}
+
+@media (max-width: 767px) {
+  .vp-doc td,
+  .vp-doc th {
+    min-width: 8.5rem;
   }
 }

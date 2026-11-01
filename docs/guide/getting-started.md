@@ -2,15 +2,13 @@
 
 XE is an expressive, indentation-based programming language that translates into optimized Rust and compiles directly into standalone native machine binaries using `rustc`.
 
----
-
 ## System Prerequisites
 
 Because XE generates Rust code and invokes `rustc` with native optimizations (`-C opt-level=3`), you need the **Rust toolchain** (`rustc` and `cargo`) installed on your system.
 
 ::: code-group
 
-```bash [Linux (Ubuntu / Debian)]
+```bash [Ubuntu / Debian]
 # 1. Install build essentials and curl
 sudo apt update && sudo apt install -y curl git build-essential
 
@@ -19,7 +17,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
 ```
 
-```bash [Linux (Fedora / RHEL)]
+```bash [Fedora / RHEL]
 # 1. Install build tools and curl
 sudo dnf groupinstall -y "Development Tools" && sudo dnf install -y curl git
 
@@ -28,13 +26,13 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source "$HOME/.cargo/env"
 ```
 
-```bash [Linux (Arch Linux)]
+```bash [Arch Linux]
 # Install base-devel, git, and Rust
 sudo pacman -S --needed base-devel git rustup
 rustup default stable
 ```
 
-```bash [macOS (Apple Silicon & Intel)]
+```bash [macOS]
 # 1. Install Xcode Command Line Tools
 xcode-select --install
 
@@ -48,7 +46,7 @@ source "$HOME/.cargo/env"
 pkg install -y rust git curl
 ```
 
-```powershell [Windows (PowerShell)]
+```powershell [Windows]
 # Install Rust toolchain using winget
 winget install Rustlang.Rustup
 
@@ -57,8 +55,6 @@ winget install Rustlang.Rustup
 ```
 
 :::
-
----
 
 ## Installation {#quick-install}
 
@@ -91,8 +87,6 @@ curl -fsSL https://xe-lang.vercel.app/install.sh | bash
 > XE_VERSION="v0.2.0" curl -fsSL https://xe-lang.vercel.app/install.sh | bash
 > ```
 
----
-
 ### 2. Windows Installation
 
 ::: code-group
@@ -110,8 +104,6 @@ cargo install --git https://github.com/V8V88V8V88/XE --bin xe
 ```
 
 :::
-
----
 
 ### 3. Build from Source (All Platforms)
 
@@ -131,7 +123,7 @@ cargo build --release
 ./target/release/xe install
 ```
 
-```powershell [Windows (PowerShell)]
+```powershell [Windows]
 # 1. Clone repository
 git clone https://github.com/V8V88V8V88/XE.git
 cd XE
@@ -144,8 +136,6 @@ cargo build --release
 ```
 
 :::
-
----
 
 ## Verifying Installation
 
@@ -164,7 +154,9 @@ xe version 0.2.0
 > - **Fish:** Run `set -Ux fish_user_paths $HOME/.local/bin $fish_user_paths`.
 > - **Windows:** Check that `%LOCALAPPDATA%\Programs\XE\bin` or your target folder is in your User Environment Variables PATH.
 
----
+::: tip Editor setup
+Using VS Code? Install the [XE Lang extension](https://marketplace.visualstudio.com/items?itemName=xe-lang.xe-language) for syntax highlighting, auto-indent and snippets. See [Editor Support](./editor-support).
+:::
 
 ## Running Your First Program
 
@@ -213,8 +205,6 @@ If you want to view the typed Rust code produced by the XE compiler:
 ```bash
 xe compile hello.xe
 ```
-
----
 
 ## Keeping XE Updated
 

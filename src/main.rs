@@ -91,7 +91,7 @@ fn update_xe() {
 
     match status {
         Ok(status) => {
-            if status.updated() {
+            if status.is_updated() {
                 println!("Successfully updated to version {}!", status.version());
             } else {
                 println!("XE is already up to date (version {}).", status.version());

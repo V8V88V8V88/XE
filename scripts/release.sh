@@ -36,6 +36,7 @@ cargo check --quiet
 echo "==> Updating documentation references..."
 sed -i -E "s/\*\*Current Version:\*\* .* pre-alpha/**Current Version:** $VERSION pre-alpha/" README.md 2>/dev/null || true
 sed -i -E "s/XE_VERSION=\"v[^\"]*\"/XE_VERSION=\"$TAG\"/" docs/guide/getting-started.md 2>/dev/null || true
+sed -i -E "s/^xe version [0-9][^ ]*$/xe version $VERSION/" docs/guide/getting-started.md 2>/dev/null || true
 sed -i -E "s/XE is in \*\*pre-alpha\*\* \([^)]*\)/XE is in **pre-alpha** ($TAG)/" docs/reference/status.md 2>/dev/null || true
 
 # 6. Commit changes

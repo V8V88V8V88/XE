@@ -12,14 +12,41 @@
       </svg>
     </button>
 
+    <section class="xe-showcase xe-reveal" aria-labelledby="xe-showcase-heading">
+      <h2 id="xe-showcase-heading" class="xe-sr-only">What XE code looks like</h2>
+      <div class="xe-window">
+        <div class="xe-pane">
+          <div class="xe-pane-bar"><span class="xe-pane-name">fib.xe</span></div>
+<pre class="xe-code"><code><span class="k">fun</span> <span class="f">fib</span>(n):
+    <span class="k">if</span> n &lt;= <span class="n">1</span>:
+        <span class="k">return</span> n
+    <span class="k">return</span> <span class="f">fib</span>(n - <span class="n">1</span>) + <span class="f">fib</span>(n - <span class="n">2</span>)
+
+<span class="k">for</span> n <span class="k">in</span> [<span class="n">5</span>, <span class="n">10</span>, <span class="n">20</span>]:
+    <span class="f">print</span>(<span class="s">"fib"</span>, n, <span class="s">"="</span>, <span class="f">fib</span>(n))</code></pre>
+        </div>
+        <div class="xe-pane xe-pane-term">
+          <div class="xe-pane-bar"><span class="xe-pane-name">Terminal</span></div>
+<pre class="xe-code"><code><span class="p">$</span> xe run fib.xe
+<span class="o">fib 5 = 5
+fib 10 = 55
+fib 20 = 6765</span>
+
+<span class="c"># or build a standalone binary</span>
+<span class="p">$</span> xe compile fib.xe -o fib
+<span class="p">$</span> ./fib</code></pre>
+        </div>
+      </div>
+    </section>
+
     <section id="install" class="xe-install-bar xe-reveal" aria-labelledby="xe-install-heading">
       <div class="xe-install-content">
         <h2 id="xe-install-heading" class="xe-install-title">
           <span class="xe-install-kicker">Install</span>
-          <span class="xe-install-headline">Install the latest XE release binary in one command.</span>
+          <span class="xe-install-headline">Get the latest release in one command</span>
         </h2>
         <div class="xe-command-box" role="group" aria-label="Install command">
-          <code id="xe-install-command">curl -fsSL https://xe-lang.vercel.app/install.sh | bash</code>
+          <code id="xe-install-command"><span class="xe-prompt" aria-hidden="true">$ </span>curl -fsSL https://xe-lang.vercel.app/install.sh | bash</code>
           <button
             type="button"
             class="xe-copy-trigger"
@@ -31,41 +58,18 @@
           </button>
         </div>
         <p class="xe-install-note">
-          Linux, macOS, and FreeBSD are supported by the one-line installer. Windows users can download the zip from
-          <a href="https://github.com/V8V88V8V88/XE/releases" target="_blank" rel="noopener noreferrer">GitHub Releases</a> or install via <code>cargo install</code>.
+          Works on Linux, macOS, and FreeBSD. On Windows, grab the zip from
+          <a href="https://github.com/V8V88V8V88/XE/releases" target="_blank" rel="noopener noreferrer">GitHub Releases</a> or use <code>cargo install</code>.
         </p>
       </div>
     </section>
 
-    <section id="faq" class="xe-faq xe-reveal" aria-labelledby="xe-faq-heading">
-      <h2 id="xe-faq-heading" class="xe-section-title">FAQ</h2>
-      <div class="xe-faq-list">
-        <div
-          v-for="(item, index) in faqItems"
-          :key="index"
-          class="xe-faq-item"
-          :class="{ 'xe-faq-active': activeFaq === index }"
-        >
-          <button
-            type="button"
-            class="xe-faq-question"
-            :id="`${faqId}-q-${index}`"
-            :aria-expanded="activeFaq === index"
-            :aria-controls="`${faqId}-a-${index}`"
-            @click="activeFaq = activeFaq === index ? null : index"
-          >
-            <span>{{ item.question }}</span>
-            <span class="xe-faq-icon" aria-hidden="true">{{ activeFaq === index ? '−' : '+' }}</span>
-          </button>
-          <div
-            :id="`${faqId}-a-${index}`"
-            class="xe-faq-answer"
-            role="region"
-            :aria-labelledby="`${faqId}-q-${index}`"
-            :aria-hidden="activeFaq !== index"
-          >
-            <p>{{ item.answer }}</p>
-          </div>
+    <section class="xe-features xe-reveal" aria-labelledby="xe-features-heading">
+      <h2 id="xe-features-heading" class="xe-sr-only">Why XE</h2>
+      <div class="xe-feature-grid">
+        <div v-for="item in features" :key="item.title" class="xe-feature">
+          <h3>{{ item.title }}</h3>
+          <p>{{ item.body }}</p>
         </div>
       </div>
     </section>
@@ -73,31 +77,34 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onUnmounted, useId } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 
-const faqId = useId()
-const activeFaq = ref(null)
 const copied = ref(false)
 const showScrollDown = ref(true)
 
-const handleScroll = () => {
-  showScrollDown.value = window.scrollY < 100
-}
+let installInView = false
+let installObserver = null
 
-const handleKeydown = (e) => {
-  if (e.key === 'Escape' && activeFaq.value !== null) {
-    activeFaq.value = null
-  }
+// Only show the arrow when the install box is below the fold
+const handleScroll = () => {
+  showScrollDown.value = window.scrollY < 100 && !installInView
 }
 
 onMounted(() => {
   window.addEventListener('scroll', handleScroll, { passive: true })
-  window.addEventListener('keydown', handleKeydown)
+  const install = document.getElementById('install')
+  if (install && 'IntersectionObserver' in window) {
+    installObserver = new IntersectionObserver(([entry]) => {
+      installInView = entry.isIntersecting
+      handleScroll()
+    }, { threshold: 0 })
+    installObserver.observe(install)
+  }
 })
 
 onUnmounted(() => {
   window.removeEventListener('scroll', handleScroll)
-  window.removeEventListener('keydown', handleKeydown)
+  installObserver?.disconnect()
 })
 
 const scrollToInstall = () => {
@@ -114,17 +121,17 @@ const copyCommand = async () => {
     copied.value = true
   } catch (err) {
     // Fallback for older browsers
-    const textArea = document.createElement("textarea");
-    textArea.value = command;
-    document.body.appendChild(textArea);
-    textArea.select();
+    const textArea = document.createElement('textarea')
+    textArea.value = command
+    document.body.appendChild(textArea)
+    textArea.select()
     try {
-      document.execCommand('copy');
-      copied.value = true;
+      document.execCommand('copy')
+      copied.value = true
     } catch (e) {}
-    document.body.removeChild(textArea);
+    document.body.removeChild(textArea)
   }
-  
+
   if (copied.value) {
     setTimeout(() => {
       copied.value = false
@@ -132,34 +139,18 @@ const copyCommand = async () => {
   }
 }
 
-const faqItems = [
+const features = [
   {
-    question: 'What exactly is XE?',
-    answer: 'XE is a small programming language designed for learning and rapid prototyping. It features an indentation-based syntax similar to Python but compiles directly into native Rust source code, which is then built into a standalone executable.'
+    title: 'Readable syntax',
+    body: 'Indentation-based blocks, no semicolons or braces. Code that reads like pseudocode.'
   },
   {
-    question: 'Why compile to Rust instead of using an interpreter?',
-    answer: 'Compiling to Rust allows XE to leverage one of the world\'s most powerful compiler backends (LLVM through rustc). This provides massive performance benefits, exhaustive static analysis, and tiny, standalone binaries without requiring a heavy virtual machine or runtime environment.'
+    title: 'Rust under the hood',
+    body: 'XE compiles to Rust and builds with rustc, so programs get its optimizer and safety checks.'
   },
   {
-    question: 'Do I need Rust installed to use XE?',
-    answer: 'Yes, XE requires the Rust toolchain (specifically rustc) to build your programs into binaries. However, the XE compiler itself handles the heavy lifting of code generation and binary invocation automatically.'
-  },
-  {
-    question: 'Is XE memory safe?',
-    answer: 'Because XE code is transpiled into high-level Rust code that follows Rust\'s ownership and safety rules, the resulting binaries benefit from the memory safety guarantees of the Rust language backend.'
-  },
-  {
-    question: 'How does the module system work?',
-    answer: 'XE uses a naming-mangled module system. When you import a module, the compiler assigns it a unique ID and renames its internal symbols to prevent conflicts, allowing for complex multi-file projects without namespace pollution.'
-  },
-  {
-    question: 'Is this ready for production use?',
-    answer: 'XE is currently in the "Pre-Alpha" stage. It is an excellent platform for learning about compiler design and language theory, but it is not yet intended for mission-critical production systems.'
+    title: 'One native binary',
+    body: 'xe compile produces a standalone executable. No VM or runtime to ship alongside it.'
   }
 ]
 </script>
-
-<style scoped>
-/* Scoped styles can be added here if needed, but we are using custom.css */
-</style>

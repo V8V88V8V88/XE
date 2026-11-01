@@ -2,11 +2,10 @@
 layout: home
 
 hero:
-  name: XE lang
-  text: Official website of the XE language and compiler.
-  tagline: XE uses indentation-based syntax, compiles to Rust, and produces native executables through rustc.
+  text: The XE programming language
+  tagline: A small, indentation-based language that compiles to Rust and builds standalone native executables with rustc. Pre-alpha, built for learning and experimentation.
   image:
-    src: /XElogo.png
+    src: /xe-icon.png
     alt: XE logo
   actions:
     - theme: brand
@@ -16,8 +15,8 @@ hero:
       text: Docs
       link: /guide/getting-started
     - theme: alt
-      text: FAQ
-      link: "#faq"
+      text: GitHub
+      link: https://github.com/V8V88V8V88/XE
 ---
 
 <XeHome />
