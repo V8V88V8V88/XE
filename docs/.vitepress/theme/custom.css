@@ -12,6 +12,7 @@
   --vp-c-text-1: #181511;
   --vp-c-text-2: #4b443b;
   --vp-c-text-3: #6d655a;
+  --vp-nav-height: 56px;
   --xe-install-bg: color-mix(in srgb, var(--vp-c-bg-alt), var(--vp-c-bg) 42%);
   --xe-command-bg: #fbf8f2;
   --xe-command-border: rgba(34, 30, 24, 0.14);
