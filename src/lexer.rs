@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use crate::error::{Span, XeError, XeErrorKind, XeResult};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -94,7 +96,7 @@ impl Token {
 
 pub struct Lexer {
     source: Vec<char>,
-    source_name: Option<String>,
+    source_name: Option<Arc<str>>,
     pos: usize,
     line: usize,
     column: usize,
@@ -113,7 +115,7 @@ impl Lexer {
     pub fn new_with_source(source: &str, source_name: Option<String>) -> Self {
         Self {
             source: source.chars().collect(),
-            source_name,
+            source_name: source_name.map(Arc::from),
             pos: 0,
             line: 1,
             column: 1,
@@ -285,6 +287,12 @@ impl Lexer {
             }
             if self.peek() == '\\' {
                 self.advance();
+                if self.is_at_end() || self.peek() == '\n' || self.peek() == '\r' {
+                    return Err(XeError::new(
+                        XeErrorKind::UnterminatedString,
+                        Some(self.make_span(start_line, start_column)),
+                    ));
+                }
                 match self.peek() {
                     'n' => value.push('\n'),
                     't' => value.push('\t'),
@@ -320,8 +328,8 @@ impl Lexer {
         }
 
         match num_str.parse::<f64>() {
-            Ok(n) => Ok(self.make_token(TokenKind::Number(n), self.line, start_column)),
-            Err(_) => Err(XeError::new(
+            Ok(n) if n.is_finite() => Ok(self.make_token(TokenKind::Number(n), self.line, start_column)),
+            _ => Err(XeError::new(
                 XeErrorKind::InvalidNumber(num_str),
                 Some(self.make_span(self.line, start_column)),
             )),
@@ -510,7 +518,7 @@ impl Lexer {
 
     fn make_span(&self, line: usize, column: usize) -> Span {
         match &self.source_name {
-            Some(source_name) => Span::with_source(line, column, source_name.clone()),
+            Some(source_name) => Span::with_source(line, column, Arc::clone(source_name)),
             None => Span::new(line, column),
         }
     }

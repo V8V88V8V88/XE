@@ -129,7 +129,7 @@ impl ModuleCompiler {
         let source_name = canonical.display().to_string();
         let source = fs::read_to_string(&canonical).map_err(|error| {
             XeError::new(
-                XeErrorKind::IoError(format!("{}: {}", source_name, error)),
+                XeErrorKind::IoError(format!("{source_name}: {error}")),
                 None,
             )
         })?;
@@ -397,8 +397,7 @@ impl ModuleCompiler {
             if params.contains(global) {
                 return Err(XeError::new(
                     XeErrorKind::InvalidGlobal(format!(
-                        "'{}' is a parameter of '{}' and cannot also be declared global",
-                        global, name
+                        "'{global}' is a parameter of '{name}' and cannot also be declared global"
                     )),
                     Some(statement.span.clone()),
                 ));
@@ -656,8 +655,7 @@ impl ModuleCompiler {
                 if ctx.is_some_and(|ctx| ctx.globals.contains(variable)) {
                     return Err(XeError::new(
                         XeErrorKind::InvalidGlobal(format!(
-                            "'{}' is declared global and cannot be used as a loop variable",
-                            variable
+                            "'{variable}' is declared global and cannot be used as a loop variable"
                         )),
                         Some(statement.span.clone()),
                     ));
@@ -722,8 +720,8 @@ impl ModuleCompiler {
             } => {
                 let value = self.rewrite_expression(value, resolver, scopes, ctx)?;
                 // `module.x = v` assigns another module's variable.
-                if let Some((module_id, rest)) = self.split_module_access(object, resolver, scopes) {
-                    if rest.is_empty() {
+                if let Some((module_id, rest)) = self.split_module_access(object, resolver, scopes)
+                    && rest.is_empty() {
                         let symbol = self.module_member_symbol(module_id, field, &statement.span)?;
                         let value = match op {
                             Some(op) => Expression {
@@ -747,7 +745,6 @@ impl ModuleCompiler {
                             span: statement.span.clone(),
                         });
                     }
-                }
                 StatementKind::FieldAssignment {
                     object: self.rewrite_expression(object, resolver, scopes, ctx)?,
                     field: field.clone(),
@@ -914,7 +911,7 @@ impl ModuleCompiler {
             .span
             .as_ref()
             .and_then(|span| span.source_name.as_ref())
-            .and_then(|source_name| self.sources.get(source_name))
+            .and_then(|source_name| self.sources.get(&**source_name))
             .cloned()
             .unwrap_or_default();
 
@@ -998,14 +995,12 @@ fn collect_exports(
     for statement in &program.statements {
         if let StatementKind::FunctionDef { name, .. } | StatementKind::StructDef { name, .. } =
             &statement.kind
-        {
-            if exports.insert(name.clone(), symbol(name)).is_some() {
+            && exports.insert(name.clone(), symbol(name)).is_some() {
                 return Err(XeError::new(
                     XeErrorKind::DuplicateFunction(name.clone()),
                     Some(statement.span.clone()),
                 ));
             }
-        }
     }
 
     let mut top_level_targets = Vec::new();
@@ -1031,8 +1026,7 @@ fn collect_exports(
         if exports.contains_key(&name) {
             return Err(XeError::new(
                 XeErrorKind::InvalidGlobal(format!(
-                    "'{}' is a function or struct and cannot also be used as a variable",
-                    name
+                    "'{name}' is a function or struct and cannot also be used as a variable"
                 )),
                 Some(span),
             ));
@@ -1056,30 +1050,42 @@ fn collect_top_level_targets(statement: &Statement, targets: &mut Vec<(String, S
             catch_variable,
             handler,
         } => {
-            body.iter().for_each(|s| collect_top_level_targets(s, targets));
+            for s in body {
+                collect_top_level_targets(s, targets);
+            }
             if let Some(name) = catch_variable {
                 targets.push((name.clone(), statement.span.clone()));
             }
-            handler.iter().for_each(|s| collect_top_level_targets(s, targets));
+            for s in handler {
+                collect_top_level_targets(s, targets);
+            }
         }
         StatementKind::If {
             then_block,
             else_block,
             ..
         } => {
-            then_block.iter().for_each(|s| collect_top_level_targets(s, targets));
+            for s in then_block {
+                collect_top_level_targets(s, targets);
+            }
             if let Some(else_block) = else_block {
-                else_block.iter().for_each(|s| collect_top_level_targets(s, targets));
+                for s in else_block {
+                    collect_top_level_targets(s, targets);
+                }
             }
         }
         StatementKind::For { variable, body, .. } => {
             // Assignments to the loop variable inside its loop do not create a global.
             let mut inner = Vec::new();
-            body.iter().for_each(|s| collect_top_level_targets(s, &mut inner));
+            for s in body {
+                collect_top_level_targets(s, &mut inner);
+            }
             targets.extend(inner.into_iter().filter(|(name, _)| name != variable));
         }
         StatementKind::While { body, .. } | StatementKind::Repeat { body, .. } => {
-            body.iter().for_each(|s| collect_top_level_targets(s, targets));
+            for s in body {
+                collect_top_level_targets(s, targets);
+            }
         }
         _ => {}
     }

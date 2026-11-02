@@ -98,7 +98,7 @@ fn update_xe() {
             }
         }
         Err(e) => {
-            eprintln!("Failed to update XE: {}", e);
+            eprintln!("Failed to update XE: {e}");
             std::process::exit(1);
         }
     }
@@ -138,7 +138,8 @@ fn refresh_path_with_cargo_bin() {
     if !paths.iter().any(|existing| existing == &cargo_bin) {
         paths.insert(0, cargo_bin);
         if let Ok(joined) = env::join_paths(paths) {
-            env::set_var("PATH", joined);
+            // SAFETY: no other threads are running when PATH is updated.
+            unsafe { env::set_var("PATH", joined) };
         }
     }
 }
@@ -154,14 +155,14 @@ fn install_rust_toolchain() -> Result<(), String> {
         .arg("-c")
         .arg(shell_script)
         .status()
-        .map_err(|e| format!("failed to start rustup installer: {}", e))?;
+        .map_err(|e| format!("failed to start rustup installer: {e}"))?;
 
     if status.success() {
         Ok(())
     } else if status.code() == Some(127) {
         Err("could not find curl or wget to download Rust".to_string())
     } else {
-        Err(format!("rustup installer exited with status {}", status))
+        Err(format!("rustup installer exited with status {status}"))
     }
 }
 
@@ -209,7 +210,7 @@ fn ensure_rustc_available() -> PathBuf {
 
     eprintln!("Installing the Rust toolchain with rustup...");
     if let Err(message) = install_rust_toolchain() {
-        eprintln!("Error: {}", message);
+        eprintln!("Error: {message}");
         eprintln!("Install Rust manually from https://rustup.rs/ and run the command again.");
         std::process::exit(1);
     }
@@ -256,23 +257,20 @@ fn default_install_dir() -> Result<PathBuf, String> {
 
 fn resolve_install_source() -> Result<PathBuf, String> {
     let current_exe = env::current_exe()
-        .map_err(|e| format!("failed to determine current executable path: {}", e))?;
+        .map_err(|e| format!("failed to determine current executable path: {e}"))?;
 
     let executable_name = if cfg!(windows) { "xe.exe" } else { "xe" };
 
     if current_exe
         .components()
         .any(|component| component.as_os_str() == "debug")
-    {
-        if let Some(debug_dir) = current_exe.parent() {
-            if let Some(target_dir) = debug_dir.parent() {
+        && let Some(debug_dir) = current_exe.parent()
+            && let Some(target_dir) = debug_dir.parent() {
                 let release_candidate = target_dir.join("release").join(executable_name);
                 if release_candidate.exists() {
                     return Ok(release_candidate);
                 }
             }
-        }
-    }
 
     Ok(current_exe)
 }
@@ -294,7 +292,8 @@ fn prepend_to_current_path(dir: &Path) {
     paths.insert(0, dir.to_path_buf());
 
     if let Ok(joined) = env::join_paths(paths) {
-        env::set_var("PATH", joined);
+        // SAFETY: no other threads are running when PATH is updated.
+        unsafe { env::set_var("PATH", joined) };
     }
 }
 
@@ -321,12 +320,11 @@ fn shell_profile_path() -> Option<PathBuf> {
 fn path_export_line(dir: &Path) -> String {
     if let Ok(home) = env::var("HOME") {
         let home_path = PathBuf::from(&home);
-        if let Ok(relative) = dir.strip_prefix(&home_path) {
-            if !relative.as_os_str().is_empty() {
+        if let Ok(relative) = dir.strip_prefix(&home_path)
+            && !relative.as_os_str().is_empty() {
                 let relative = relative.to_string_lossy().replace('\\', "/");
-                return format!("export PATH=\"$HOME/{}:$PATH\"", relative);
+                return format!("export PATH=\"$HOME/{relative}:$PATH\"");
             }
-        }
     }
 
     format!("export PATH={}:$PATH", shell_quote(&dir.to_string_lossy()))
@@ -395,7 +393,7 @@ fn prompt_yes_no(message: &str) -> bool {
         return false;
     }
 
-    eprint!("{} [y/N]: ", message);
+    eprint!("{message} [y/N]: ");
     let _ = io::stderr().flush();
 
     let mut response = String::new();
@@ -409,13 +407,13 @@ fn prompt_yes_no(message: &str) -> bool {
 #[cfg(unix)]
 fn relaunch_install_with_elevation(args: &[String]) -> Result<i32, String> {
     let current_exe = env::current_exe()
-        .map_err(|e| format!("failed to determine current executable path: {}", e))?;
+        .map_err(|e| format!("failed to determine current executable path: {e}"))?;
     let status = Command::new("sudo")
         .arg(current_exe)
         .arg("install")
         .args(args)
         .status()
-        .map_err(|e| format!("failed to start elevated installer with sudo: {}", e))?;
+        .map_err(|e| format!("failed to start elevated installer with sudo: {e}"))?;
     Ok(status.code().unwrap_or(1))
 }
 
@@ -449,13 +447,11 @@ fn exit_with_permission_guidance(args: &[String], install_dir: &Path, operation:
     let target = install_dir.display();
     let guidance = if cfg!(windows) {
         format!(
-            "Permission denied while trying to {} '{}'. Relaunch with administrator access?",
-            operation, target
+            "Permission denied while trying to {operation} '{target}'. Relaunch with administrator access?"
         )
     } else {
         format!(
-            "Permission denied while trying to {} '{}'. Retry with sudo?",
-            operation, target
+            "Permission denied while trying to {operation} '{target}'. Retry with sudo?"
         )
     };
 
@@ -463,7 +459,7 @@ fn exit_with_permission_guidance(args: &[String], install_dir: &Path, operation:
         match relaunch_install_with_elevation(args) {
             Ok(code) => std::process::exit(code),
             Err(message) => {
-                eprintln!("Error: {}", message);
+                eprintln!("Error: {message}");
                 std::process::exit(1);
             }
         }
@@ -471,13 +467,11 @@ fn exit_with_permission_guidance(args: &[String], install_dir: &Path, operation:
 
     if cfg!(windows) {
         eprintln!(
-            "Error: permission denied while trying to {} '{}'. Run the command again from an Administrator shell or choose a user-writable directory.",
-            operation, target
+            "Error: permission denied while trying to {operation} '{target}'. Run the command again from an Administrator shell or choose a user-writable directory."
         );
     } else {
         eprintln!(
-            "Error: permission denied while trying to {} '{}'. Run the command again with sudo or choose a user-writable directory.",
-            operation, target
+            "Error: permission denied while trying to {operation} '{target}'. Run the command again with sudo or choose a user-writable directory."
         );
     }
     std::process::exit(1);
@@ -488,7 +482,7 @@ fn install_binary(args: &[String]) {
         [] => match default_install_dir() {
             Ok(dir) => dir,
             Err(message) => {
-                eprintln!("Error: {}", message);
+                eprintln!("Error: {message}");
                 std::process::exit(1);
             }
         },
@@ -503,7 +497,7 @@ fn install_binary(args: &[String]) {
     let source = match resolve_install_source() {
         Ok(path) => path,
         Err(message) => {
-            eprintln!("Error: {}", message);
+            eprintln!("Error: {message}");
             std::process::exit(1);
         }
     };
@@ -581,7 +575,7 @@ fn install_binary(args: &[String]) {
             install_dir.display()
         ),
         Err(message) => {
-            eprintln!("Warning: {}", message);
+            eprintln!("Warning: {message}");
             eprintln!(
                 "Add '{}' to your PATH manually if you want to run 'xe' directly in new shells.",
                 install_dir.display()
@@ -591,7 +585,14 @@ fn install_binary(args: &[String]) {
 }
 
 fn compile_or_exit(input_file: &Path) -> String {
-    match compile_path(input_file) {
+    let path = input_file.to_path_buf();
+    let result = std::thread::Builder::new()
+        .stack_size(256 * 1024 * 1024)
+        .spawn(move || compile_path(&path))
+        .expect("failed to start the compiler thread")
+        .join()
+        .unwrap_or_else(|payload| std::panic::resume_unwind(payload));
+    match result {
         Ok(code) => code,
         Err(e) => {
             print_compile_error(&e);
@@ -609,23 +610,24 @@ fn build_binary(rustc: &Path, rust_code: &str, output: &Path) -> Result<(), Stri
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let temp_dir = env::temp_dir().join(format!("xe_build_{}_{}", std::process::id(), unique_id));
-    fs::create_dir_all(&temp_dir).map_err(|e| format!("Error creating build directory: {}", e))?;
+    fs::create_dir_all(&temp_dir).map_err(|e| format!("Error creating build directory: {e}"))?;
     let source = temp_dir.join("main.rs");
     let executable = temp_dir.join(if cfg!(windows) { "main.exe" } else { "main" });
 
     let result = (|| {
-        fs::write(&source, rust_code).map_err(|e| format!("Error writing intermediate file: {}", e))?;
+        fs::write(&source, rust_code).map_err(|e| format!("Error writing intermediate file: {e}"))?;
         let output_result = Command::new(rustc)
+            .env("RUST_MIN_STACK", "1073741824")
             .arg(&source)
             .arg("-o")
             .arg(&executable)
             .arg("-C")
             .arg("opt-level=3")
             .arg("--edition")
-            .arg("2021")
+            .arg("2024")
             .stderr(Stdio::piped())
             .output()
-            .map_err(|e| format!("Error: Failed to run rustc: {}", e))?;
+            .map_err(|e| format!("Error: Failed to run rustc: {e}"))?;
         if !output_result.status.success() {
             return Err(format!(
                 "Rust compilation failed:\n{}",
@@ -715,7 +717,7 @@ fn cache_key(rustc: &Path, rust_code: &str) -> String {
 fn cached_binary(rustc: &Path, rust_code: &str) -> Result<ProgramBinary, String> {
     let executable_name = |stem: &str| {
         if cfg!(windows) {
-            format!("{}.exe", stem)
+            format!("{stem}.exe")
         } else {
             stem.to_string()
         }
@@ -742,7 +744,7 @@ fn cached_binary(rustc: &Path, rust_code: &str) -> Result<ProgramBinary, String>
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let dir = env::temp_dir().join(format!("xe_run_{}_{}", std::process::id(), unique_id));
-    fs::create_dir_all(&dir).map_err(|e| format!("Error creating temporary directory: {}", e))?;
+    fs::create_dir_all(&dir).map_err(|e| format!("Error creating temporary directory: {e}"))?;
     let path = dir.join(executable_name("main"));
     let program = ProgramBinary::Temporary { dir, path };
     build_binary(rustc, rust_code, program.path())?;
@@ -755,7 +757,8 @@ fn prune_cache(dir: &Path) {
         return;
     };
     let mut files: Vec<(std::time::SystemTime, PathBuf)> = entries
-        .filter_map(|entry| entry.ok())
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| is_cached_binary_name(&entry.file_name().to_string_lossy()))
         .filter_map(|entry| {
             let modified = entry.metadata().ok()?.modified().ok()?;
             Some((modified, entry.path()))
@@ -768,6 +771,11 @@ fn prune_cache(dir: &Path) {
     for (_, path) in &files[..files.len() - MAX_CACHED_BINARIES] {
         let _ = fs::remove_file(path);
     }
+}
+
+fn is_cached_binary_name(name: &str) -> bool {
+    let stem = name.strip_suffix(".exe").unwrap_or(name);
+    stem.len() == 32 && stem.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn main() {
@@ -800,13 +808,13 @@ fn main() {
 
             let rust_code = compile_or_exit(Path::new(&args[2]));
             if args.len() == 3 {
-                print!("{}", rust_code);
+                print!("{rust_code}");
             } else if args.len() == 5 && args[3] == "-o" {
                 let rustc = ensure_rustc_available();
                 match build_binary(&rustc, &rust_code, Path::new(&args[4])) {
                     Ok(()) => eprintln!("Successfully compiled to binary: {}", args[4]),
                     Err(message) => {
-                        eprintln!("{}", message);
+                        eprintln!("{message}");
                         std::process::exit(1);
                     }
                 }
@@ -828,7 +836,7 @@ fn main() {
             let program = match cached_binary(&rustc, &rust_code) {
                 Ok(program) => program,
                 Err(message) => {
-                    eprintln!("{}", message);
+                    eprintln!("{message}");
                     std::process::exit(1);
                 }
             };
@@ -843,7 +851,7 @@ fn main() {
             let exit_code = match run_result {
                 Ok(status) => status.code().unwrap_or(1),
                 Err(e) => {
-                    eprintln!("Failed to run program: {}", e);
+                    eprintln!("Failed to run program: {e}");
                     1
                 }
             };

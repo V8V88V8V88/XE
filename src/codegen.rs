@@ -127,7 +127,7 @@ impl CodeGenerator {
         self.emit("static XE_LOCATIONS: &[(&str, usize, &str)] = &[\n");
         let locations = std::mem::take(&mut self.locations);
         for (file, line, text) in &locations {
-            self.emit(&format!("    ({:?}, {}, {:?}),\n", file, line, text));
+            self.emit(&format!("    ({file:?}, {line}, {text:?}),\n"));
         }
         self.emit("];\n\n");
         self.emit("fn main() {\n    xe_start(xe_main);\n}\n");
@@ -196,14 +196,14 @@ impl CodeGenerator {
         let args = params
             .iter()
             .enumerate()
-            .map(|(i, (_, ty))| convert(&format!("__xe_args[{}].clone()", i), &XeType::Unknown, ty))
+            .map(|(i, (_, ty))| convert(&format!("__xe_args[{i}].clone()"), &XeType::Unknown, ty))
             .collect::<Vec<_>>()
             .join(", ");
-        let call = convert(&format!("{}({})", name, args), return_type, &XeType::Unknown);
+        let call = convert(&format!("{name}({args})"), return_type, &XeType::Unknown);
         self.line(&cached_function_value(
             &function_value_name(name),
             &format!(
-                "xe_function({:?}, {n}, Some({n}), |__xe_args: Vec<XeValue>| -> XeValue {{ {} }})",
+                "xe_function({:?}, {n}, Some({n}), Box::new(|__xe_args: Vec<XeValue>| -> XeValue {{ {} }}))",
                 display_name(name),
                 call,
                 n = params.len()
@@ -214,19 +214,19 @@ impl CodeGenerator {
 
     fn generate_struct(&mut self, name: &str, fields: &[String]) {
         let params = (0..fields.len())
-            .map(|i| format!("a{}: XeValue", i))
+            .map(|i| format!("a{i}: XeValue"))
             .collect::<Vec<_>>()
             .join(", ");
         let field_literals = fields
             .iter()
-            .map(|f| format!("{:?}", f))
+            .map(|f| format!("{f:?}"))
             .collect::<Vec<_>>()
             .join(", ");
         let field_values = (0..fields.len())
-            .map(|i| format!("a{}", i))
+            .map(|i| format!("a{i}"))
             .collect::<Vec<_>>()
             .join(", ");
-        self.line(&format!("fn {}({}) -> XeValue {{", name, params));
+        self.line(&format!("fn {name}({params}) -> XeValue {{"));
         self.line(&format!(
             "    xe_make_struct({:?}, &[{}], vec![{}])",
             display_name(name),
@@ -235,13 +235,13 @@ impl CodeGenerator {
         ));
         self.line("}");
         let args = (0..fields.len())
-            .map(|i| format!("__xe_args[{}].clone()", i))
+            .map(|i| format!("__xe_args[{i}].clone()"))
             .collect::<Vec<_>>()
             .join(", ");
         self.line(&cached_function_value(
             &function_value_name(name),
             &format!(
-                "xe_function({:?}, {n}, Some({n}), |__xe_args: Vec<XeValue>| -> XeValue {{ {}({}) }})",
+                "xe_function({:?}, {n}, Some({n}), Box::new(|__xe_args: Vec<XeValue>| -> XeValue {{ {}({}) }}))",
                 display_name(name),
                 name,
                 args,
@@ -271,7 +271,7 @@ impl CodeGenerator {
                     let mut binds = String::new();
                     let mut args = Vec::new();
                     for i in 0..count {
-                        let name = format!("__xe_arg{}", i);
+                        let name = format!("__xe_arg{i}");
                         binds.push_str(&format!("let {} = __xe_args[{}].clone(); ", local_name(&name), i));
                         self.scopes[0].insert(name.clone(), XeType::Unknown);
                         let arg = TypedExpression {
@@ -296,7 +296,7 @@ impl CodeGenerator {
                         span: Span::new(0, 0),
                     };
                     let code = self.expr_as(&call, &XeType::Unknown);
-                    arms.push(format!("{} => {{ {}{} }}", count, binds, code));
+                    arms.push(format!("{count} => {{ {binds}{code} }}"));
                 }
                 self.scopes = saved_scopes;
                 format!(
@@ -306,13 +306,13 @@ impl CodeGenerator {
             }
         };
         let max = match signature.max_args {
-            Some(max) => format!("Some({})", max),
+            Some(max) => format!("Some({max})"),
             None => "None".to_string(),
         };
         self.line(&cached_function_value(
             &builtin_value_name(builtin),
             &format!(
-                "xe_function({:?}, {}, {}, |__xe_args: Vec<XeValue>| -> XeValue {{ {} }})",
+                "xe_function({:?}, {}, {}, Box::new(|__xe_args: Vec<XeValue>| -> XeValue {{ {} }}))",
                 builtin.name(),
                 signature.min_args,
                 max,
@@ -326,18 +326,18 @@ impl CodeGenerator {
         let Some(file) = &span.source_name else {
             return 0;
         };
-        let key = (file.clone(), span.line);
+        let key = (file.to_string(), span.line);
         if let Some(id) = self.location_ids.get(&key) {
             return *id;
         }
         let text = self
             .sources
-            .get(file)
+            .get(&**file)
             .and_then(|source| source.lines().nth(span.line.saturating_sub(1)))
             .unwrap_or_default()
             .to_string();
         let id = self.locations.len();
-        self.locations.push((file.clone(), span.line, text));
+        self.locations.push((file.to_string(), span.line, text));
         self.location_ids.insert(key, id);
         id
     }
@@ -370,7 +370,7 @@ impl CodeGenerator {
                 else_block,
             } => {
                 let cond = self.expr_as(condition, &XeType::Boolean);
-                self.line(&format!("if {} {{", cond));
+                self.line(&format!("if {cond} {{"));
                 self.generate_block(then_block);
                 if let Some(else_stmts) = else_block {
                     self.line("} else {");
@@ -381,13 +381,13 @@ impl CodeGenerator {
             TypedStatementKind::While { condition, body } => {
                 let location = self.current_location;
                 let cond = self.expr_as(condition, &XeType::Boolean);
-                self.line(&format!("while {{ xe_loc({}); {} }} {{", location, cond));
+                self.line(&format!("while {{ xe_loc({location}); {cond} }} {{"));
                 self.generate_loop_body(body, None);
                 self.line("}");
             }
             TypedStatementKind::Repeat { count, body } => {
                 let count = self.expr_as(count, &XeType::Number);
-                self.line(&format!("for _ in 0..xe_repeat_count({}) {{", count));
+                self.line(&format!("for _ in 0..xe_repeat_count({count}) {{"));
                 self.generate_loop_body(body, None);
                 self.line("}");
             }
@@ -417,14 +417,13 @@ impl CodeGenerator {
                             _ => unreachable!("range() takes 1 to 3 arguments"),
                         };
                         self.line(&format!(
-                            "for __xe_n in xe_range({}, {}, {}) {{",
-                            start, stop, step
+                            "for __xe_n in xe_range({start}, {stop}, {step}) {{"
                         ));
                         convert("__xe_n", &XeType::Number, variable_type)
                     }
                     None => {
                         let iterable = self.expr_as(iterable, &XeType::Unknown);
-                        self.line(&format!("for __xe_item in xe_iter(&{}) {{", iterable));
+                        self.line(&format!("for __xe_item in xe_iter(&{iterable}) {{"));
                         convert("__xe_item", &XeType::Unknown, variable_type)
                     }
                 };
@@ -436,15 +435,15 @@ impl CodeGenerator {
                 let value = match (value, &return_type) {
                     (Some(expr), XeType::Void) => {
                         let code = self.expr(expr);
-                        format!("{{ let _ = {}; }}", code)
+                        format!("{{ let _ = {code}; }}")
                     }
                     (Some(expr), ty) => self.expr_as(expr, ty),
                     (None, ty) => convert("XeValue::None", &XeType::Unknown, ty),
                 };
                 if self.try_depth > 0 {
-                    self.line(&format!("return XeFlow::Return({});", value));
+                    self.line(&format!("return XeFlow::Return({value});"));
                 } else {
-                    self.line(&format!("return {};", value));
+                    self.line(&format!("return {value};"));
                 }
             }
             TypedStatementKind::Break => {
@@ -457,7 +456,7 @@ impl CodeGenerator {
             }
             TypedStatementKind::Expression(expr) => {
                 let code = self.expr(expr);
-                self.line(&format!("let _ = {};", code));
+                self.line(&format!("let _ = {code};"));
             }
             TypedStatementKind::IndexAssignment {
                 object,
@@ -477,8 +476,7 @@ impl CodeGenerator {
                     None => String::new(),
                 };
                 self.line(&format!(
-                    "{{ let __xe_v = {}; let __xe_o = {}; let __xe_k = {}; {}xe_set_index(&__xe_o, __xe_k, __xe_v); }}",
-                    value, object, index, update
+                    "{{ let __xe_v = {value}; let __xe_o = {object}; let __xe_k = {index}; {update}xe_set_index(&__xe_o, __xe_k, __xe_v); }}"
                 ));
             }
             TypedStatementKind::FieldAssignment {
@@ -498,8 +496,7 @@ impl CodeGenerator {
                     None => String::new(),
                 };
                 self.line(&format!(
-                    "{{ let __xe_v = {}; let __xe_o = {}; {}xe_set_field(&__xe_o, {:?}, __xe_v); }}",
-                    value, object, update, field
+                    "{{ let __xe_v = {value}; let __xe_o = {object}; {update}xe_set_field(&__xe_o, {field:?}, __xe_v); }}"
                 ));
             }
             TypedStatementKind::Try {
@@ -514,6 +511,9 @@ impl CodeGenerator {
     }
 
     fn assign_code(&mut self, name: &str, value: &TypedExpression) -> String {
+        if let Some(code) = self.append_code(name, value) {
+            return code;
+        }
         if let Some(ty) = self.local_type(name) {
             let code = self.expr_as(value, &ty);
             format!("{} = {};", local_name(name), code)
@@ -522,6 +522,123 @@ impl CodeGenerator {
             format!("xe_gset(&{}, {});", global_key(name), code)
         } else {
             unreachable!("assignment to undeclared variable '{}'", name)
+        }
+    }
+
+    fn append_code(&mut self, name: &str, value: &TypedExpression) -> Option<String> {
+        let TypedExpressionKind::BinaryOp {
+            left,
+            op: BinaryOperator::Add,
+            right,
+        } = &value.kind
+        else {
+            return None;
+        };
+        let appends_to_self = matches!(&left.kind, TypedExpressionKind::Identifier(n) if n == name);
+        if !appends_to_self || left.ty != XeType::Text || right.ty != XeType::Text {
+            return None;
+        }
+        let text = match &right.kind {
+            TypedExpressionKind::String(literal) => format!("{literal:?}"),
+            _ => self.expr_as(right, &XeType::Text),
+        };
+        if self.local_type(name) == Some(XeType::Text) {
+            return Some(format!(
+                "{{ let __xe_v = {}; {}.push_str(&__xe_v); }}",
+                text,
+                local_name(name)
+            ));
+        }
+        if self.globals.get(name) == Some(&XeType::Text) && !has_user_calls(right) {
+            let key = global_key(name);
+            return Some(format!(
+                "{{ xe_gref(&{}, {:?}, |_| ()); let __xe_v = {}; xe_gappend(&{}, &__xe_v); }}",
+                key,
+                display_name(name),
+                text,
+                key
+            ));
+        }
+        None
+    }
+
+    /// Module-level variables are borrowed only while no later operand can run user code
+    /// that might reassign them.
+    fn with_operands(
+        &mut self,
+        operands: &[(&TypedExpression, XeType, Pass)],
+        body: impl FnOnce(&mut Self, &[String]) -> String,
+    ) -> String {
+        let borrows: Vec<Option<Borrow>> = operands
+            .iter()
+            .enumerate()
+            .map(|(i, (expr, target, pass))| {
+                let later_pure = operands[i + 1..].iter().all(|(e, _, _)| !has_user_calls(e));
+                self.borrowable(expr, target, *pass, later_pure)
+            })
+            .collect();
+        let last_global = borrows
+            .iter()
+            .rposition(|borrow| matches!(borrow, Some(Borrow::Global { .. })));
+
+        let mut prefix = String::new();
+        let mut suffix = String::new();
+        let mut refs = Vec::with_capacity(operands.len());
+        for (i, ((expr, target, _), borrow)) in operands.iter().zip(borrows).enumerate() {
+            match borrow {
+                Some(Borrow::Place(place)) => refs.push(place),
+                Some(Borrow::Global { key, name }) => {
+                    self.temp_counter += 1;
+                    let reference = format!("__xe_ref{}", self.temp_counter);
+                    prefix.push_str(&format!("xe_gref(&{key}, {name:?}, |{reference}| {{ "));
+                    suffix.push_str(" })");
+                    refs.push(format!("(*{reference})"));
+                }
+                None => {
+                    let code = self.expr_as(expr, target);
+                    if last_global.is_some_and(|last| i < last) {
+                        self.temp_counter += 1;
+                        let temp = format!("__xe_t{}", self.temp_counter);
+                        prefix.push_str(&format!("let {temp} = {code}; "));
+                        refs.push(temp);
+                    } else {
+                        refs.push(format!("({code})"));
+                    }
+                }
+            }
+        }
+        let body = body(self, &refs);
+        if prefix.is_empty() {
+            body
+        } else {
+            format!("{{ {prefix}{body}{suffix} }}")
+        }
+    }
+
+    fn borrowable(
+        &self,
+        expr: &TypedExpression,
+        target: &XeType,
+        pass: Pass,
+        later_pure: bool,
+    ) -> Option<Borrow> {
+        let same_kind = |ty: &XeType| ty == target || (ty.is_dynamic() && target.is_dynamic());
+        match (&expr.kind, pass) {
+            (_, Pass::Owned) => None,
+            (TypedExpressionKind::String(literal), Pass::RefOrStr) if *target == XeType::Text => {
+                Some(Borrow::Place(format!("*{literal:?}")))
+            }
+            (TypedExpressionKind::Identifier(name), _) if same_kind(&expr.ty) => {
+                if self.local_type(name).is_some() {
+                    return Some(Borrow::Place(local_name(name)));
+                }
+                let stored = self.globals.get(name)?;
+                (later_pure && same_kind(stored)).then(|| Borrow::Global {
+                    key: global_key(name),
+                    name: display_name(name).to_string(),
+                })
+            }
+            _ => None,
         }
     }
 
@@ -556,7 +673,7 @@ impl CodeGenerator {
     fn loop_exit(&self, kind: &str) -> String {
         match self.loop_try_depths.last() {
             Some(depth) if *depth == self.try_depth => format!("{};", kind.to_lowercase()),
-            Some(_) => format!("return XeFlow::{};", kind),
+            Some(_) => format!("return XeFlow::{kind};"),
             None => "unreachable!()".to_string(),
         }
     }
@@ -574,8 +691,7 @@ impl CodeGenerator {
         let result_type = self.return_type.to_rust_type();
 
         self.line(&format!(
-            "let {}: XeFlow<{}> = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> XeFlow<{}> {{",
-            flow, result_type, result_type
+            "let {flow}: XeFlow<{result_type}> = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> XeFlow<{result_type}> {{"
         ));
         self.try_depth += 1;
         self.generate_block(body);
@@ -597,7 +713,7 @@ impl CodeGenerator {
             self.scopes.pop();
             // `l___xe_message` is the local-name form of the message binding.
             self.line(&format!("    let {} = __xe_message;", local_name("__xe_message")));
-            self.line(&format!("    {}", code));
+            self.line(&format!("    {code}"));
         }
         self.generate_block(handler);
         self.line("    XeFlow::Normal");
@@ -613,8 +729,7 @@ impl CodeGenerator {
             "return __xe_r;"
         };
         self.line(&format!(
-            "match {} {{ XeFlow::Normal => {{}} XeFlow::Break => {{ {} }} XeFlow::Continue => {{ {} }} XeFlow::Return(__xe_r) => {{ {} }} }}",
-            flow, break_arm, continue_arm, return_arm
+            "match {flow} {{ XeFlow::Normal => {{}} XeFlow::Break => {{ {break_arm} }} XeFlow::Continue => {{ {continue_arm} }} XeFlow::Return(__xe_r) => {{ {return_arm} }} }}"
         ));
     }
 
@@ -640,8 +755,8 @@ impl CodeGenerator {
     /// Generates a Rust expression whose type is `expr.ty.to_rust_type()`.
     fn expr(&mut self, expr: &TypedExpression) -> String {
         match &expr.kind {
-            TypedExpressionKind::Number(n) => format!("{:?}f64", n),
-            TypedExpressionKind::String(s) => format!("{:?}.to_string()", s),
+            TypedExpressionKind::Number(n) => format!("{n:?}f64"),
+            TypedExpressionKind::String(s) => format!("{s:?}.to_string()"),
             TypedExpressionKind::Boolean(b) => b.to_string(),
             TypedExpressionKind::None => "XeValue::None".to_string(),
             TypedExpressionKind::List(elements) => {
@@ -650,7 +765,7 @@ impl CodeGenerator {
                     .map(|e| self.expr_as(e, &XeType::Unknown))
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("xe_list(vec![{}])", items)
+                format!("xe_list(vec![{items}])")
             }
             TypedExpressionKind::Map(entries) => {
                 let entries = entries
@@ -658,11 +773,11 @@ impl CodeGenerator {
                     .map(|(k, v)| {
                         let k = self.expr_as(k, &XeType::Unknown);
                         let v = self.expr_as(v, &XeType::Unknown);
-                        format!("({}, {})", k, v)
+                        format!("({k}, {v})")
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("xe_make_map(vec![{}])", entries)
+                format!("xe_make_map(vec![{entries}])")
             }
             TypedExpressionKind::Identifier(name) => {
                 if self.local_type(name).is_some() {
@@ -694,7 +809,7 @@ impl CodeGenerator {
                     .map(|(arg, ty)| self.expr_as(arg, ty))
                     .collect::<Vec<_>>()
                     .join(", ");
-                let call = self.after_call(format!("{}({})", name, args));
+                let call = self.after_call(format!("{name}({args})"));
                 // A call analyzed before its callee sees a provisional `unknown` type.
                 let actual = self.function_returns.get(name).cloned().unwrap_or(XeType::Unknown);
                 convert(&call, &actual, &expr.ty)
@@ -711,7 +826,7 @@ impl CodeGenerator {
                     .map(|arg| self.expr_as(arg, &XeType::Unknown))
                     .collect::<Vec<_>>()
                     .join(", ");
-                let call = self.after_call(format!("xe_call(&{}, vec![{}])", callee, args));
+                let call = self.after_call(format!("xe_call(&{callee}, vec![{args}])"));
                 convert(&call, &XeType::Unknown, &expr.ty)
             }
             TypedExpressionKind::Lambda {
@@ -720,44 +835,60 @@ impl CodeGenerator {
                 body,
             } => self.lambda(params, captures, body),
             TypedExpressionKind::Index { object, index } => {
-                let object = self.expr_as(object, &XeType::Unknown);
-                let index = self.expr_as(index, &XeType::Unknown);
-                convert(
-                    &format!("xe_index(&{}, &{})", object, index),
-                    &XeType::Unknown,
-                    &expr.ty,
-                )
+                let (target, function) = if object.ty == XeType::Text {
+                    (XeType::Text, "xe_text_index")
+                } else {
+                    (XeType::Unknown, "xe_index")
+                };
+                let code = self.with_operands(
+                    &[(object, target, Pass::Ref), (index, XeType::Unknown, Pass::Ref)],
+                    |_, r| format!("{}(&{}, &{})", function, r[0], r[1]),
+                );
+                convert(&code, &XeType::Unknown, &expr.ty)
             }
             TypedExpressionKind::Slice { object, start, end } => {
-                let object = self.expr_as(object, &XeType::Unknown);
-                let mut bound = |bound: &Option<Box<TypedExpression>>| match bound {
-                    Some(bound) => format!("Some({})", self.expr_as(bound, &XeType::Number)),
-                    None => "None".to_string(),
-                };
-                let start = bound(start);
-                let end = bound(end);
-                convert(
-                    &format!("xe_slice(&{}, {}, {})", object, start, end),
-                    &XeType::Unknown,
-                    &expr.ty,
-                )
+                let is_text = object.ty == XeType::Text;
+                let target = if is_text { XeType::Text } else { XeType::Unknown };
+                let mut operands = vec![(&**object, target, Pass::Ref)];
+                operands.extend(start.iter().map(|b| (&**b, XeType::Number, Pass::Owned)));
+                operands.extend(end.iter().map(|b| (&**b, XeType::Number, Pass::Owned)));
+                let code = self.with_operands(&operands, |_, r| {
+                    let mut bounds = r[1..].iter().map(|b| format!("Some({b})"));
+                    let mut bound = |present: bool| {
+                        if present {
+                            bounds.next().unwrap()
+                        } else {
+                            "None".to_string()
+                        }
+                    };
+                    let (start, end) = (bound(start.is_some()), bound(end.is_some()));
+                    if is_text {
+                        format!("XeValue::Text(xe_text_slice(&{}, {}, {}))", r[0], start, end)
+                    } else {
+                        format!("xe_slice(&{}, {}, {})", r[0], start, end)
+                    }
+                });
+                convert(&code, &XeType::Unknown, &expr.ty)
             }
             TypedExpressionKind::FieldAccess { object, field } => {
                 let object = self.expr_as(object, &XeType::Unknown);
                 convert(
-                    &format!("xe_get_field(&{}, {:?})", object, field),
+                    &format!("xe_get_field(&{object}, {field:?})"),
                     &XeType::Unknown,
                     &expr.ty,
                 )
             }
+            TypedExpressionKind::Truthy(inner) if inner.ty == XeType::Text => self.with_operands(
+                &[(inner, XeType::Text, Pass::Ref)],
+                |_, r| format!("!{}.is_empty()", r[0]),
+            ),
             TypedExpressionKind::Truthy(inner) => {
                 let code = self.expr(inner);
                 match &inner.ty {
                     XeType::Boolean => code,
-                    XeType::Number => format!("({} != 0.0)", code),
-                    XeType::Text => format!("!({}).is_empty()", code),
-                    XeType::Void => format!("{{ {}; false }}", code),
-                    _ => format!("xe_truthy(&{})", code),
+                    XeType::Number => format!("({code} != 0.0)"),
+                    XeType::Void => format!("{{ {code}; false }}"),
+                    _ => format!("xe_truthy(&{code})"),
                 }
             }
             TypedExpressionKind::Wrap(inner) => self.expr_as(inner, &expr.ty),
@@ -793,7 +924,7 @@ impl CodeGenerator {
         self.scopes = saved_scopes;
 
         format!(
-            "{{ {}xe_function(\"<lambda>\", {n}, Some({n}), move |__xe_args: Vec<XeValue>| -> XeValue {{ xe_loc({}); {}{} }}) }}",
+            "{{ {}xe_function(\"<lambda>\", {n}, Some({n}), Box::new(move |__xe_args: Vec<XeValue>| -> XeValue {{ xe_loc({}); {}{} }})) }}",
             copies,
             self.current_location,
             binds,
@@ -809,122 +940,175 @@ impl CodeGenerator {
         op: BinaryOperator,
         right: &TypedExpression,
     ) -> String {
-        use XeType::{Boolean, Number, Text};
-        let l = self.expr(left);
-        let r = self.expr(right);
+        use XeType::{Boolean, Number, Text, Unknown};
         let both = |ty: &XeType| left.ty == *ty && right.ty == *ty;
+        let symbol = op.symbol();
         match op {
-            BinaryOperator::Add => {
-                if both(&Number) {
-                    format!("({} + {})", l, r)
-                } else if both(&Text) {
-                    format!("xe_concat({}, &{})", l, r)
-                } else {
-                    let l = convert(&l, &left.ty, &XeType::Unknown);
-                    let r = convert(&r, &right.ty, &XeType::Unknown);
-                    convert(&format!("xe_add({}, {})", l, r), &XeType::Unknown, &expr.ty)
-                }
+            BinaryOperator::Add if both(&Text) => self.with_operands(
+                &[(left, Text, Pass::Owned), (right, Text, Pass::RefOrStr)],
+                |_, r| format!("xe_concat({}, &{})", r[0], r[1]),
+            ),
+            BinaryOperator::Add if !both(&Number) => {
+                let code = self.with_operands(
+                    &[(left, Unknown, Pass::Owned), (right, Unknown, Pass::Owned)],
+                    |_, r| format!("xe_add({}, {})", r[0], r[1]),
+                );
+                convert(&code, &Unknown, &expr.ty)
             }
-            BinaryOperator::Subtract => format!("({} - {})", l, r),
-            BinaryOperator::Multiply => format!("({} * {})", l, r),
-            BinaryOperator::Divide => format!("xe_div({}, {})", l, r),
-            BinaryOperator::FloorDivide => format!("xe_floor_div({}, {})", l, r),
-            BinaryOperator::Modulo => format!("xe_mod({}, {})", l, r),
-            BinaryOperator::Power => format!("xe_pow({}, {})", l, r),
             BinaryOperator::Less
             | BinaryOperator::Greater
             | BinaryOperator::LessEqual
-            | BinaryOperator::GreaterEqual => {
-                if both(&Number) || both(&Text) {
-                    format!("({} {} {})", l, op.symbol(), r)
+            | BinaryOperator::GreaterEqual
+                if both(&Text) =>
+            {
+                self.with_operands(
+                    &[(left, Text, Pass::Ref), (right, Text, Pass::Ref)],
+                    |_, r| format!("({} {} {})", r[0], symbol, r[1]),
+                )
+            }
+            BinaryOperator::Less
+            | BinaryOperator::Greater
+            | BinaryOperator::LessEqual
+            | BinaryOperator::GreaterEqual
+                if !both(&Number) =>
+            {
+                self.with_operands(
+                    &[(left, Unknown, Pass::Ref), (right, Unknown, Pass::Ref)],
+                    |_, r| format!("xe_compare(&{}, &{}, {:?})", r[0], r[1], symbol),
+                )
+            }
+            BinaryOperator::Equal | BinaryOperator::NotEqual if !both(&Number) && !both(&Boolean) => {
+                let negate = if op == BinaryOperator::NotEqual { "!" } else { "" };
+                if both(&Text) {
+                    self.with_operands(
+                        &[(left, Text, Pass::RefOrStr), (right, Text, Pass::RefOrStr)],
+                        |_, r| format!("({}({} == {}))", negate, r[0], r[1]),
+                    )
                 } else {
-                    let l = convert(&l, &left.ty, &XeType::Unknown);
-                    let r = convert(&r, &right.ty, &XeType::Unknown);
-                    format!("xe_compare(&{}, &{}, {:?})", l, r, op.symbol())
+                    self.with_operands(
+                        &[(left, Unknown, Pass::Ref), (right, Unknown, Pass::Ref)],
+                        |_, r| format!("({}xe_eq(&{}, &{}))", negate, r[0], r[1]),
+                    )
                 }
             }
-            BinaryOperator::Equal | BinaryOperator::NotEqual => {
-                let equal = if both(&Number) {
-                    format!("xe_num_eq({}, {})", l, r)
-                } else if both(&Text) || both(&Boolean) {
-                    format!("({} == {})", l, r)
-                } else {
-                    let l = convert(&l, &left.ty, &XeType::Unknown);
-                    let r = convert(&r, &right.ty, &XeType::Unknown);
-                    format!("xe_eq(&{}, &{})", l, r)
-                };
-                if op == BinaryOperator::NotEqual {
-                    format!("(!{})", equal)
-                } else {
-                    equal
+            BinaryOperator::In | BinaryOperator::NotIn => {
+                let negate = if op == BinaryOperator::NotIn { "!" } else { "" };
+                self.with_operands(
+                    &[(left, left.ty.clone(), Pass::Ref), (right, right.ty.clone(), Pass::Ref)],
+                    |_, r| format!("({}xe_in(&{}, &{}))", negate, r[0], r[1]),
+                )
+            }
+            _ => {
+                let l = self.expr(left);
+                let r = self.expr(right);
+                match op {
+                    BinaryOperator::Add => format!("({l} + {r})"),
+                    BinaryOperator::Subtract => format!("({l} - {r})"),
+                    BinaryOperator::Multiply => format!("({l} * {r})"),
+                    BinaryOperator::Divide => format!("xe_div({l}, {r})"),
+                    BinaryOperator::FloorDivide => format!("xe_floor_div({l}, {r})"),
+                    BinaryOperator::Modulo => format!("xe_mod({l}, {r})"),
+                    BinaryOperator::Power => format!("xe_pow({l}, {r})"),
+                    BinaryOperator::Equal if both(&Number) => format!("xe_num_eq({l}, {r})"),
+                    BinaryOperator::NotEqual if both(&Number) => format!("(!xe_num_eq({l}, {r}))"),
+                    BinaryOperator::And => format!("({l} && {r})"),
+                    BinaryOperator::Or => format!("({l} || {r})"),
+                    _ => format!("({l} {symbol} {r})"),
                 }
             }
-            BinaryOperator::In => format!("xe_in(&{}, &{})", l, r),
-            BinaryOperator::NotIn => format!("(!xe_in(&{}, &{}))", l, r),
-            BinaryOperator::And => format!("({} && {})", l, r),
-            BinaryOperator::Or => format!("({} || {})", l, r),
         }
     }
 
     fn builtin_call(&mut self, builtin: Builtin, args: &[TypedExpression]) -> String {
-        let a: Vec<String> = args.iter().map(|arg| self.expr(arg)).collect();
-        let optional = |i: usize| match a.get(i) {
-            Some(code) => format!("Some({})", code),
-            None => "None".to_string(),
+        if builtin == Builtin::Length
+            && let TypedExpressionKind::Wrap(inner) = &args[0].kind
+                && inner.ty == XeType::Text {
+                    return self.with_operands(&[(inner, XeType::Text, Pass::Ref)], |_, r| {
+                        format!("xe_text_length(&{})", r[0])
+                    });
+                }
+        let by_reference = |i: usize| match builtin {
+            Builtin::Print | Builtin::Min | Builtin::Max | Builtin::Exit => false,
+            Builtin::Append | Builtin::Insert | Builtin::Pop => i == 0,
+            Builtin::Range
+            | Builtin::Abs
+            | Builtin::Floor
+            | Builtin::Ceil
+            | Builtin::Sqrt
+            | Builtin::Round
+            | Builtin::Random
+            | Builtin::Args => false,
+            _ => true,
         };
-        let name = builtin.name();
-        match builtin {
-            Builtin::Print => format!("xe_builtin_print(vec![{}])", a.join(", ")),
-            Builtin::Min | Builtin::Max => format!("xe_builtin_{}(vec![{}])", name, a.join(", ")),
-            Builtin::Input => match a.first() {
-                Some(prompt) => format!("xe_builtin_input(&{})", prompt),
-                None => "xe_builtin_input(\"\")".to_string(),
-            },
-            Builtin::Length
-            | Builtin::Type
-            | Builtin::Keys
-            | Builtin::Values
-            | Builtin::Sum
-            | Builtin::Sort
-            | Builtin::Reverse
-            | Builtin::Copy
-            | Builtin::Upper
-            | Builtin::Lower
-            | Builtin::Trim
-            | Builtin::ReadFile
-            | Builtin::FileExists
-            | Builtin::Error => format!("xe_builtin_{}(&{})", name, a[0]),
-            Builtin::Convert
-            | Builtin::Remove
-            | Builtin::HasKey
-            | Builtin::Contains
-            | Builtin::Join
-            | Builtin::StartsWith
-            | Builtin::EndsWith
-            | Builtin::Find
-            | Builtin::WriteFile
-            | Builtin::AppendFile => format!("xe_builtin_{}(&{}, &{})", name, a[0], a[1]),
-            Builtin::Replace => format!("xe_builtin_replace(&{}, &{}, &{})", a[0], a[1], a[2]),
-            Builtin::Append => format!("xe_builtin_append(&{}, {})", a[0], a[1]),
-            Builtin::Insert => format!("xe_builtin_insert(&{}, {}, {})", a[0], a[1], a[2]),
-            Builtin::Pop => format!("xe_builtin_pop(&{}, {})", a[0], optional(1)),
-            Builtin::Split => match a.get(1) {
-                Some(separator) => format!("xe_builtin_split(&{}, Some(({}).as_str()))", a[0], separator),
-                None => format!("xe_builtin_split(&{}, None)", a[0]),
-            },
-            Builtin::Range => match a.as_slice() {
-                [stop] => format!("xe_builtin_range(0.0, {}, 1.0)", stop),
-                [start, stop] => format!("xe_builtin_range({}, {}, 1.0)", start, stop),
-                [start, stop, step] => format!("xe_builtin_range({}, {}, {})", start, stop, step),
-                _ => unreachable!("range() takes 1 to 3 arguments"),
-            },
-            Builtin::Abs | Builtin::Floor | Builtin::Ceil | Builtin::Sqrt => {
-                format!("xe_builtin_{}({})", name, a[0])
+        let operands: Vec<_> = args
+            .iter()
+            .enumerate()
+            .map(|(i, arg)| {
+                let pass = if by_reference(i) { Pass::Ref } else { Pass::Owned };
+                (arg, arg.ty.clone(), pass)
+            })
+            .collect();
+        self.with_operands(&operands, |_, a| {
+            let optional = |i: usize| match a.get(i) {
+                Some(code) => format!("Some({code})"),
+                None => "None".to_string(),
+            };
+            let name = builtin.name();
+            match builtin {
+                Builtin::Print => format!("xe_builtin_print(vec![{}])", a.join(", ")),
+                Builtin::Min | Builtin::Max => format!("xe_builtin_{}(vec![{}])", name, a.join(", ")),
+                Builtin::Input => match a.first() {
+                    Some(prompt) => format!("xe_builtin_input(&{prompt})"),
+                    None => "xe_builtin_input(\"\")".to_string(),
+                },
+                Builtin::Length
+                | Builtin::Type
+                | Builtin::Keys
+                | Builtin::Values
+                | Builtin::Sum
+                | Builtin::Sort
+                | Builtin::Reverse
+                | Builtin::Copy
+                | Builtin::Upper
+                | Builtin::Lower
+                | Builtin::Trim
+                | Builtin::ReadFile
+                | Builtin::FileExists
+                | Builtin::Error => format!("xe_builtin_{}(&{})", name, a[0]),
+                Builtin::Convert
+                | Builtin::Remove
+                | Builtin::HasKey
+                | Builtin::Contains
+                | Builtin::Join
+                | Builtin::StartsWith
+                | Builtin::EndsWith
+                | Builtin::Find
+                | Builtin::WriteFile
+                | Builtin::AppendFile => format!("xe_builtin_{}(&{}, &{})", name, a[0], a[1]),
+                Builtin::Replace => format!("xe_builtin_replace(&{}, &{}, &{})", a[0], a[1], a[2]),
+                Builtin::Append => format!("xe_builtin_append(&{}, {})", a[0], a[1]),
+                Builtin::Insert => format!("xe_builtin_insert(&{}, {}, {})", a[0], a[1], a[2]),
+                Builtin::Pop => format!("xe_builtin_pop(&{}, {})", a[0], optional(1)),
+                Builtin::Split => match a.get(1) {
+                    Some(separator) => {
+                        format!("xe_builtin_split(&{}, Some({}.as_str()))", a[0], separator)
+                    }
+                    None => format!("xe_builtin_split(&{}, None)", a[0]),
+                },
+                Builtin::Range => match a {
+                    [stop] => format!("xe_builtin_range(0.0, {stop}, 1.0)"),
+                    [start, stop] => format!("xe_builtin_range({start}, {stop}, 1.0)"),
+                    [start, stop, step] => format!("xe_builtin_range({start}, {stop}, {step})"),
+                    _ => unreachable!("range() takes 1 to 3 arguments"),
+                },
+                Builtin::Abs | Builtin::Floor | Builtin::Ceil | Builtin::Sqrt => {
+                    format!("xe_builtin_{}({})", name, a[0])
+                }
+                Builtin::Round => format!("xe_builtin_round({}, {})", a[0], optional(1)),
+                Builtin::Random | Builtin::Args => format!("xe_builtin_{name}()"),
+                Builtin::Exit => format!("xe_builtin_exit({})", optional(0)),
             }
-            Builtin::Round => format!("xe_builtin_round({}, {})", a[0], optional(1)),
-            Builtin::Random | Builtin::Args => format!("xe_builtin_{}()", name),
-            Builtin::Exit => format!("xe_builtin_exit({})", optional(0)),
-        }
+        })
     }
 
     fn local_type(&self, name: &str) -> Option<XeType> {
@@ -944,6 +1128,50 @@ impl CodeGenerator {
     }
 }
 
+#[derive(Clone, Copy)]
+enum Pass {
+    Owned,
+    Ref,
+    RefOrStr,
+}
+
+enum Borrow {
+    Place(String),
+    Global { key: String, name: String },
+}
+
+fn has_user_calls(expr: &TypedExpression) -> bool {
+    use TypedExpressionKind as K;
+    match &expr.kind {
+        K::FunctionCall { .. } | K::DynamicCall { .. } => true,
+        K::Number(_)
+        | K::String(_)
+        | K::Boolean(_)
+        | K::None
+        | K::Identifier(_)
+        | K::FunctionRef(_)
+        | K::BuiltinRef(_)
+        | K::Lambda { .. } => false,
+        K::List(items) => items.iter().any(has_user_calls),
+        K::Map(entries) => entries
+            .iter()
+            .any(|(key, value)| has_user_calls(key) || has_user_calls(value)),
+        K::BinaryOp { left, right, .. } => has_user_calls(left) || has_user_calls(right),
+        K::BuiltinCall { args, .. } => args.iter().any(has_user_calls),
+        K::Index { object, index } => has_user_calls(object) || has_user_calls(index),
+        K::Slice { object, start, end } => {
+            has_user_calls(object)
+                || start.as_deref().is_some_and(has_user_calls)
+                || end.as_deref().is_some_and(has_user_calls)
+        }
+        K::UnaryOp { operand: inner, .. }
+        | K::FieldAccess { object: inner, .. }
+        | K::Truthy(inner)
+        | K::Wrap(inner)
+        | K::Unwrap(inner, _) => has_user_calls(inner),
+    }
+}
+
 /// The Rust type a builtin's runtime function actually returns. `convert`, `min` and
 /// `max` return dynamic values even when the analyzer knows a more precise type.
 fn builtin_result_type(builtin: Builtin, declared: &XeType) -> XeType {
@@ -960,29 +1188,28 @@ fn convert(code: &str, from: &XeType, to: &XeType) -> String {
         return code.to_string();
     }
     if *from == XeType::Void {
-        return convert(&format!("{{ {}; XeValue::None }}", code), &XeType::Unknown, to);
+        return convert(&format!("{{ {code}; XeValue::None }}"), &XeType::Unknown, to);
     }
     if *to == XeType::Void {
-        return format!("{{ let _ = {}; }}", code);
+        return format!("{{ let _ = {code}; }}");
     }
     match (from.is_dynamic(), to.is_dynamic()) {
         (true, true) => code.to_string(),
-        (false, true) => format!("XeValue::from({})", code),
+        (false, true) => format!("XeValue::from({code})"),
         (true, false) => match to {
-            XeType::Number => format!("({}).as_f64()", code),
-            XeType::Boolean => format!("({}).as_bool()", code),
-            XeType::Text => format!("({}).as_string()", code),
+            XeType::Number => format!("({code}).as_f64()"),
+            XeType::Boolean => format!("({code}).as_bool()"),
+            XeType::Text => format!("({code}).as_string()"),
             _ => unreachable!("only scalars are native"),
         },
-        (false, false) => convert(&format!("XeValue::from({})", code), &XeType::Unknown, to),
+        (false, false) => convert(&format!("XeValue::from({code})"), &XeType::Unknown, to),
     }
 }
 
 /// A function returning the same function value every time, so `f == f` holds.
 fn cached_function_value(name: &str, value: &str) -> String {
     format!(
-        "fn {}() -> XeValue {{ thread_local! {{ static VALUE: XeValue = {}; }} VALUE.with(|v| v.clone()) }}",
-        name, value
+        "fn {name}() -> XeValue {{ thread_local! {{ static VALUE: XeValue = {value}; }} VALUE.with(|v| v.clone()) }}"
     )
 }
 
@@ -998,15 +1225,15 @@ fn default_value(ty: &XeType) -> &'static str {
 
 /// Locals get a prefix so they can never collide with Rust keywords or runtime names.
 fn local_name(name: &str) -> String {
-    format!("l_{}", name)
+    format!("l_{name}")
 }
 
 fn global_key(name: &str) -> String {
-    format!("XE_G_{}", name)
+    format!("XE_G_{name}")
 }
 
 fn function_value_name(name: &str) -> String {
-    format!("xe_fnval_{}", name)
+    format!("xe_fnval_{name}")
 }
 
 fn builtin_value_name(builtin: Builtin) -> String {

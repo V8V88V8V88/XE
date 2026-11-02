@@ -1,6 +1,6 @@
 # Project Status
 
-XE is in **pre-alpha** (v0.2.0). While the compiler is stable enough for experimentation and learning, it is not yet intended for production use.
+XE is in **pre-alpha** (v0.2.1). While the compiler is stable enough for experimentation and learning, it is not yet intended for production use.
 
 ## Current Capabilities
 
@@ -14,6 +14,16 @@ The compiler provides a complete pipeline from `.xe` source to a native binary, 
 *   **Standard Control Flow**: `if/elif/else`, `while`, `for` (over lists, text, maps and `range`), `repeat N times`, and `try/catch` error handling.
 *   **Functions as Values**: Functions can be passed around and returned, and `lambda` creates anonymous functions.
 *   **Developer Interface**: The `xe` CLI manages the full workflow: `xe run` for rapid testing, `xe compile` for optimized builds, and `xe install` to manage the environment.
+
+## New in v0.2.1
+
+*   **Faster Text and Maps**: Building text with `s = s + x` appends in place, indexing and slicing ASCII text no longer copies it, and `remove()` on a map no longer slows down with its size. Each of these went from seconds to under 0.1 s on 40,000 to 200,000 items.
+*   **Longer Expressions**: Flat expressions such as long `+` chains and method chains are no longer rejected as "nested too deeply", and nesting can go up to 1000 levels.
+*   **Fixes**: Number literals too large for a number are a compile error instead of a Rust error; a `\` before a line break in text is reported as an unterminated string; `input()` keeps leading and trailing spaces and only removes the line break; `xe run` only clears its own files from the cache directory.
+*   **Rust 2024**: XE and the programs it generates use the Rust 2024 edition.
+*   **VS Code Extension**: The XE Lang extension adds syntax highlighting and snippets for `.xe` files.
+*   **More Fixes**: Imports through symlinked files work, comparing lists or maps that contain themselves no longer overflows the stack, and deeply nested expressions give a clear error instead of crashing.
+*   **Website**: Redesigned home page and docs, with XE syntax highlighting, a FAQ page, and Editor Support and Contributing pages.
 
 ## New in v0.2.0
 

@@ -498,8 +498,7 @@ impl SemanticAnalyzer {
                     ty => {
                         return Err(XeError::new(
                             XeErrorKind::InvalidAssignmentTarget(format!(
-                                "cannot assign to an element of a {} value",
-                                ty
+                                "cannot assign to an element of a {ty} value"
                             )),
                             Some(stmt.span.clone()),
                         ));
@@ -613,7 +612,7 @@ impl SemanticAnalyzer {
             });
             self.report
                 .var_types
-                .insert(format!("{}::{}", name, param), ty.clone());
+                .insert(format!("{name}::{param}"), ty.clone());
         }
 
         let saved_scopes = std::mem::replace(
@@ -692,11 +691,10 @@ impl SemanticAnalyzer {
     }
 
     fn mark_assigned(&mut self, name: &str) {
-        if let Some(function) = &mut self.function {
-            if let Some(assigned) = &mut function.assigned {
+        if let Some(function) = &mut self.function
+            && let Some(assigned) = &mut function.assigned {
                 assigned.insert(name.to_string());
             }
-        }
     }
 
     fn is_definitely_assigned(&self, name: &str) -> bool {
@@ -714,7 +712,7 @@ impl SemanticAnalyzer {
     fn var_key(&self, name: &str) -> String {
         match &self.function {
             Some(function) => format!("{}::{}", function.name, name),
-            None => format!("::{}", name),
+            None => format!("::{name}"),
         }
     }
 
@@ -788,16 +786,15 @@ impl SemanticAnalyzer {
                 })?;
                 if checked {
                     let key = match location {
-                        VarLocation::Global => format!("::{}", name),
+                        VarLocation::Global => format!("::{name}"),
                         VarLocation::Local(_) => self.var_key(name),
                     };
                     self.report.checked_vars.insert(key);
                 }
-                if let VarLocation::Local(index) = location {
-                    if self.scopes[index].kind == ScopeKind::FunctionLocals {
+                if let VarLocation::Local(index) = location
+                    && self.scopes[index].kind == ScopeKind::FunctionLocals {
                         self.mark_assigned(name);
                     }
-                }
                 Ok(coerced)
             }
             Some((VarLocation::Global, _)) => {
@@ -808,7 +805,7 @@ impl SemanticAnalyzer {
                 global.defined_at = span.clone();
                 self.report
                     .var_types
-                    .insert(format!("::{}", name), value.ty.clone());
+                    .insert(format!("::{name}"), value.ty.clone());
                 Ok(value)
             }
             Some((VarLocation::Local(_), _)) => unreachable!("locals are always declared"),
@@ -932,7 +929,7 @@ impl SemanticAnalyzer {
                         kind: ExpressionKind::Identifier(name.clone()),
                         span: span.clone(),
                     })?;
-                    self.dynamic_call(callee, args, &format!("'{}'", name))?
+                    self.dynamic_call(callee, args, &format!("'{name}'"))?
                 } else {
                     self.named_call(name, None, args, &span)?
                 }
@@ -954,7 +951,7 @@ impl SemanticAnalyzer {
                         },
                         span: span.clone(),
                     })?;
-                    self.dynamic_call(callee, args, &format!("'{}'", method))?
+                    self.dynamic_call(callee, args, &format!("'{method}'"))?
                 }
             }
 
@@ -1087,7 +1084,7 @@ impl SemanticAnalyzer {
                     Ok(())
                 } else {
                     Err(XeError::new(
-                        XeErrorKind::UndefinedVariable(format!("{}.{}", struct_name, field)),
+                        XeErrorKind::UndefinedVariable(format!("{struct_name}.{field}")),
                         Some(span.clone()),
                     ))
                 }
@@ -1095,9 +1092,9 @@ impl SemanticAnalyzer {
             XeType::Map | XeType::Unknown => Ok(()),
             ty => {
                 let message = if is_assignment {
-                    format!("cannot assign field '{}' on a {} value", field, ty)
+                    format!("cannot assign field '{field}' on a {ty} value")
                 } else {
-                    format!("cannot access field '{}' on a {} value", field, ty)
+                    format!("cannot access field '{field}' on a {ty} value")
                 };
                 Err(XeError::new(
                     XeErrorKind::InvalidAssignmentTarget(message),
@@ -1281,8 +1278,7 @@ impl SemanticAnalyzer {
                     other => {
                         return Err(XeError::new(
                             XeErrorKind::InvalidOperation(format!(
-                                "convert() target must be \"number\", \"text\" or \"boolean\", got \"{}\"",
-                                other
+                                "convert() target must be \"number\", \"text\" or \"boolean\", got \"{other}\""
                             )),
                             Some(all_args[1].span.clone()),
                         ));
@@ -1437,27 +1433,39 @@ fn collect_top_level_targets(statement: &Statement, targets: &mut Vec<String>) {
             catch_variable,
             handler,
         } => {
-            body.iter().for_each(|s| collect_top_level_targets(s, targets));
+            for s in body {
+                collect_top_level_targets(s, targets);
+            }
             targets.extend(catch_variable.iter().cloned());
-            handler.iter().for_each(|s| collect_top_level_targets(s, targets));
+            for s in handler {
+                collect_top_level_targets(s, targets);
+            }
         }
         StatementKind::If {
             then_block,
             else_block,
             ..
         } => {
-            then_block.iter().for_each(|s| collect_top_level_targets(s, targets));
+            for s in then_block {
+                collect_top_level_targets(s, targets);
+            }
             if let Some(else_block) = else_block {
-                else_block.iter().for_each(|s| collect_top_level_targets(s, targets));
+                for s in else_block {
+                    collect_top_level_targets(s, targets);
+                }
             }
         }
         StatementKind::For { variable, body, .. } => {
             let mut inner = Vec::new();
-            body.iter().for_each(|s| collect_top_level_targets(s, &mut inner));
+            for s in body {
+                collect_top_level_targets(s, &mut inner);
+            }
             targets.extend(inner.into_iter().filter(|name| name != variable));
         }
         StatementKind::While { body, .. } | StatementKind::Repeat { body, .. } => {
-            body.iter().for_each(|s| collect_top_level_targets(s, targets));
+            for s in body {
+                collect_top_level_targets(s, targets);
+            }
         }
         _ => {}
     }

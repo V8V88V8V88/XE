@@ -19,7 +19,7 @@ fn get_unique_id() -> u64 {
 #[allow(dead_code)]
 fn compile_xe(source: &str) -> Result<String, String> {
     let id = get_unique_id();
-    let temp_file = std::env::temp_dir().join(format!("test_input_{}.xe", id));
+    let temp_file = std::env::temp_dir().join(format!("test_input_{id}.xe"));
     fs::write(&temp_file, source).map_err(|e| e.to_string())?;
 
     let output = xe_command()
@@ -43,7 +43,7 @@ fn run_xe(source: &str) -> Result<String, String> {
 
 fn run_xe_with_input(source: &str, input: &str) -> Result<String, String> {
     let id = get_unique_id();
-    let temp_dir = std::env::temp_dir().join(format!("xe_test_{}", id));
+    let temp_dir = std::env::temp_dir().join(format!("xe_test_{id}"));
     let _ = fs::create_dir_all(&temp_dir);
 
     let xe_file = temp_dir.join("input.xe");
@@ -76,7 +76,7 @@ fn run_xe_with_input(source: &str, input: &str) -> Result<String, String> {
 
 fn compile_and_run_binary(source: &str) -> Result<String, String> {
     let id = get_unique_id();
-    let temp_dir = std::env::temp_dir().join(format!("xe_compile_test_{}", id));
+    let temp_dir = std::env::temp_dir().join(format!("xe_compile_test_{id}"));
     let _ = fs::create_dir_all(&temp_dir);
 
     let xe_file = temp_dir.join("input.xe");
@@ -141,7 +141,7 @@ fn write_project_files(root: &std::path::Path, files: &[(&str, &str)]) -> Result
 
 fn run_xe_project(entry_file: &str, files: &[(&str, &str)]) -> Result<String, String> {
     let id = get_unique_id();
-    let temp_dir = std::env::temp_dir().join(format!("xe_project_run_{}", id));
+    let temp_dir = std::env::temp_dir().join(format!("xe_project_run_{id}"));
     let _ = fs::create_dir_all(&temp_dir);
     write_project_files(&temp_dir, files)?;
 
@@ -162,7 +162,7 @@ fn run_xe_project(entry_file: &str, files: &[(&str, &str)]) -> Result<String, St
 
 fn compile_xe_project(entry_file: &str, files: &[(&str, &str)]) -> Result<String, String> {
     let id = get_unique_id();
-    let temp_dir = std::env::temp_dir().join(format!("xe_project_compile_{}", id));
+    let temp_dir = std::env::temp_dir().join(format!("xe_project_compile_{id}"));
     let _ = fs::create_dir_all(&temp_dir);
     write_project_files(&temp_dir, files)?;
 
@@ -186,7 +186,7 @@ fn compile_and_run_project_binary(
     files: &[(&str, &str)],
 ) -> Result<String, String> {
     let id = get_unique_id();
-    let temp_dir = std::env::temp_dir().join(format!("xe_project_binary_{}", id));
+    let temp_dir = std::env::temp_dir().join(format!("xe_project_binary_{id}"));
     let _ = fs::create_dir_all(&temp_dir);
     write_project_files(&temp_dir, files)?;
 
@@ -249,11 +249,11 @@ fn test_arithmetic() {
 #[test]
 fn test_variables() {
     let output = run_xe(
-        r#"
+        r"
 x = 5
 y = 10
 print(x + y)
-"#,
+",
     )
     .unwrap();
     assert_eq!(output.trim(), "15");
@@ -307,12 +307,12 @@ repeat 3 times:
 #[test]
 fn test_repeat_loop_can_reassign_outer_variable() {
     let output = run_xe(
-        r#"
+        r"
 count = 0
 repeat 5 times:
     count = count + 1
 print(count)
-"#,
+",
     )
     .unwrap();
     assert_eq!(output.trim(), "5");
@@ -321,12 +321,12 @@ print(count)
 #[test]
 fn test_function_definition() {
     let output = run_xe(
-        r#"
+        r"
 fun double(n):
     return n * 2
 
 print(double(21))
-"#,
+",
     )
     .unwrap();
     assert_eq!(output.trim(), "42");
@@ -335,12 +335,12 @@ print(double(21))
 #[test]
 fn test_assignment_in_if_updates_outer_scope() {
     let output = run_xe(
-        r#"
+        r"
 x = 1
 if true:
     x = 2
 print(x)
-"#,
+",
     )
     .unwrap();
     assert_eq!(output.trim(), "2");
@@ -369,7 +369,7 @@ else:
 #[test]
 fn test_while_loop() {
     let output = run_xe(
-        r#"
+        r"
 count = 0
 total = 0
 
@@ -378,7 +378,7 @@ while count < 5:
     count = count + 1
 
 print(total)
-"#,
+",
     )
     .unwrap();
     assert_eq!(output.trim(), "10");
@@ -387,14 +387,14 @@ print(total)
 #[test]
 fn test_for_loop_over_list() {
     let output = run_xe(
-        r#"
+        r"
 total = 0
 
 for item in [1, 2, 3, 4]:
     total = total + item
 
 print(total)
-"#,
+",
     )
     .unwrap();
     assert_eq!(output.trim(), "10");
@@ -419,7 +419,7 @@ print(result)
 #[test]
 fn test_break_in_while_loop() {
     let output = run_xe(
-        r#"
+        r"
 count = 0
 
 while true:
@@ -428,7 +428,7 @@ while true:
         break
 
 print(count)
-"#,
+",
     )
     .unwrap();
     assert_eq!(output.trim(), "3");
@@ -437,7 +437,7 @@ print(count)
 #[test]
 fn test_continue_in_while_loop() {
     let output = run_xe(
-        r#"
+        r"
 count = 0
 total = 0
 
@@ -448,7 +448,7 @@ while count < 5:
     total = total + count
 
 print(total)
-"#,
+",
     )
     .unwrap();
     assert_eq!(output.trim(), "12");
@@ -489,10 +489,10 @@ fn test_boolean_operations() {
 #[test]
 fn test_list_operations() {
     let output = run_xe(
-        r#"
+        r"
 items = [1, 2, 3]
 print(length(items))
-"#,
+",
     )
     .unwrap();
     assert_eq!(output.trim(), "3");
@@ -501,13 +501,13 @@ print(length(items))
 #[test]
 fn test_list_concatenation() {
     let output = run_xe(
-        r#"
+        r"
 items = [1, 2]
 items = items + [3, 4]
 print(length(items))
 for i in items:
     print(i)
-"#,
+",
     )
     .unwrap();
     assert_eq!(output.trim(), "4\n1\n2\n3\n4");
@@ -531,13 +531,13 @@ for t in tasks:
 
 #[test]
 fn test_type_function() {
-    let output = run_xe(r#"print(type(42))"#).unwrap();
+    let output = run_xe(r"print(type(42))").unwrap();
     assert_eq!(output.trim(), "number");
 
     let output = run_xe(r#"print(type("hello"))"#).unwrap();
     assert_eq!(output.trim(), "text");
 
-    let output = run_xe(r#"print(type(true))"#).unwrap();
+    let output = run_xe(r"print(type(true))").unwrap();
     assert_eq!(output.trim(), "boolean");
 }
 
@@ -573,12 +573,12 @@ fn test_undefined_function_error() {
 #[test]
 fn test_loop_variable_scope_is_local() {
     let result = run_xe(
-        r#"
+        r"
 for item in [1, 2]:
     print(item)
 
 print(item)
-"#,
+",
     );
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("undefined variable"));
@@ -587,12 +587,12 @@ print(item)
 #[test]
 fn test_variables_assigned_in_if_blocks_are_visible_after_them() {
     let result = run_xe(
-        r#"
+        r"
 if true:
     inner = 42
 
 print(inner)
-"#,
+",
     );
     assert_eq!(result.unwrap(), "42\n");
 }
@@ -618,11 +618,11 @@ fn test_continue_outside_loop_error() {
 #[test]
 fn test_compile_o_produces_runnable_binary() {
     let output = compile_and_run_binary(
-        r#"
+        r"
 value = 40
 value = value + 2
 print(value)
-"#,
+",
     )
     .unwrap();
     assert_eq!(output.trim(), "42");
@@ -673,10 +673,10 @@ repeat 2.5 times:
 #[test]
 fn test_runtime_error_for_out_of_bounds_index() {
     let result = run_xe(
-        r#"
+        r"
 items = [1, 2]
 print(items[5])
-"#,
+",
     );
     assert!(result.is_err());
 }
@@ -684,11 +684,11 @@ print(items[5])
 #[test]
 fn test_negative_index_counts_from_the_end() {
     let result = run_xe(
-        r#"
+        r"
 items = [1, 2, 3]
 print(items[-1], items[-3])
 print(items[-4])
-"#,
+",
     );
     let err = result.unwrap_err();
     assert!(err.contains("list index -4 out of bounds (length 3)"), "{}", err);
@@ -697,26 +697,26 @@ print(items[-4])
 #[test]
 fn test_runtime_error_for_invalid_for_iteration() {
     let result = run_xe(
-        r#"
+        r"
 for item in 42:
     print(item)
-"#,
+",
     );
     assert!(result.is_err());
 }
 
 #[test]
 fn test_runtime_error_for_invalid_arithmetic_types() {
-    let result = run_xe(r#"print([1, 2] - 1)"#);
+    let result = run_xe(r"print([1, 2] - 1)");
     assert!(result.is_err());
 }
 
 #[test]
 fn test_compile_error_shows_source_snippet_and_caret() {
     let result = run_xe(
-        r#"
+        r"
 print(missing_name)
-"#,
+",
     );
     let error = result.unwrap_err();
     assert!(error.contains("undefined variable 'missing_name'"));
@@ -736,13 +736,13 @@ fn test_return_outside_function_error() {
 #[test]
 fn test_duplicate_function_definition_error() {
     let result = run_xe(
-        r#"
+        r"
 fun answer():
     return 1
 
 fun answer():
     return 2
-"#,
+",
     );
     assert!(result.is_err());
     assert!(result
@@ -753,14 +753,14 @@ fun answer():
 #[test]
 fn test_function_scope_captures_outer_variables() {
     let output = run_xe(
-        r#"
+        r"
 x = 1
 
 fun show():
     print(x)
 
 show()
-"#,
+",
     )
     .unwrap();
     assert_eq!(output.trim(), "1");
@@ -769,7 +769,7 @@ show()
 #[test]
 fn test_compile_rejects_unknown_extra_arguments() {
     let id = get_unique_id();
-    let temp_file = std::env::temp_dir().join(format!("test_input_{}.xe", id));
+    let temp_file = std::env::temp_dir().join(format!("test_input_{id}.xe"));
     fs::write(&temp_file, "print(1)\n").unwrap();
 
     let result = run_cli(&[
@@ -787,7 +787,7 @@ fn test_compile_rejects_unknown_extra_arguments() {
 #[test]
 fn test_install_command_copies_executable() {
     let id = get_unique_id();
-    let temp_dir = std::env::temp_dir().join(format!("xe_install_test_{}", id));
+    let temp_dir = std::env::temp_dir().join(format!("xe_install_test_{id}"));
     let install_dir = temp_dir.join("bin");
 
     let install_output = xe_command()
@@ -828,17 +828,17 @@ fn test_from_import_across_files_runs_in_run_mode() {
         &[
             (
                 "main.xe",
-                r#"
+                r"
 from math_utils import double
 print(double(21))
-"#,
+",
             ),
             (
                 "math_utils.xe",
-                r#"
+                r"
 fun double(n):
     return n * 2
-"#,
+",
             ),
         ],
     )
@@ -854,17 +854,17 @@ fn test_import_binds_module_namespace() {
         &[
             (
                 "main.xe",
-                r#"
+                r"
 import helpers
 print(helpers.square(7))
-"#,
+",
             ),
             (
                 "helpers.xe",
-                r#"
+                r"
 fun square(n):
     return n * n
-"#,
+",
             ),
         ],
     )
@@ -880,26 +880,26 @@ fn test_imported_module_functions_can_call_their_own_imports() {
         &[
             (
                 "main.xe",
-                r#"
+                r"
 from math_ops import quadruple
 print(quadruple(5))
-"#,
+",
             ),
             (
                 "math_ops.xe",
-                r#"
+                r"
 from math_utils import double
 
 fun quadruple(n):
     return double(double(n))
-"#,
+",
             ),
             (
                 "math_utils.xe",
-                r#"
+                r"
 fun double(n):
     return n * 2
-"#,
+",
             ),
         ],
     )
@@ -915,13 +915,13 @@ fn test_module_initialization_runs_once_in_dependency_order() {
         &[
             (
                 "main.xe",
-                r#"
+                r"
 from a import run_a
 from b import run_b
 
 run_a()
 run_b()
-"#,
+",
             ),
             (
                 "a.xe",
@@ -958,7 +958,7 @@ print("shared")
 #[cfg(unix)]
 fn run_xe_project_with_symlink(files: &[(&str, &str)]) -> Result<String, String> {
     let id = get_unique_id();
-    let temp_dir = std::env::temp_dir().join(format!("xe_project_symlink_{}", id));
+    let temp_dir = std::env::temp_dir().join(format!("xe_project_symlink_{id}"));
     let _ = fs::create_dir_all(&temp_dir);
     write_project_files(&temp_dir, files)?;
     std::os::unix::fs::symlink("real.xe", temp_dir.join("link.xe")).map_err(|e| e.to_string())?;
@@ -984,18 +984,18 @@ fn test_import_through_symlink() {
     let output = run_xe_project_with_symlink(&[
         (
             "main.xe",
-            r#"
+            r"
 import link
 
 print(link.helper())
-"#,
+",
         ),
         (
             "real.xe",
-            r#"
+            r"
 fun helper():
     return 1
-"#,
+",
         ),
     ])
     .unwrap();
@@ -1009,12 +1009,12 @@ fn test_module_reached_directly_and_through_symlink_initializes_once() {
     let output = run_xe_project_with_symlink(&[
         (
             "main.xe",
-            r#"
+            r"
 import link
 import real
 
 print(link.helper() + real.helper())
-"#,
+",
         ),
         (
             "real.xe",
@@ -1064,17 +1064,17 @@ fn test_compile_without_o_prints_linked_rust_for_imports() {
         &[
             (
                 "main.xe",
-                r#"
+                r"
 from math_utils import double
 print(double(10))
-"#,
+",
             ),
             (
                 "math_utils.xe",
-                r#"
+                r"
 fun double(n):
     return n * 2
-"#,
+",
             ),
         ],
     )
@@ -1090,9 +1090,9 @@ fn test_missing_module_reports_import_error() {
         "main.xe",
         &[(
             "main.xe",
-            r#"
+            r"
 import missing
-"#,
+",
         )],
     );
 
@@ -1109,17 +1109,17 @@ fn test_missing_export_reports_module_symbol_error() {
         &[
             (
                 "main.xe",
-                r#"
+                r"
 from math_utils import triple
 print(triple(3))
-"#,
+",
             ),
             (
                 "math_utils.xe",
-                r#"
+                r"
 fun double(n):
     return n * 2
-"#,
+",
             ),
         ],
     );
@@ -1142,10 +1142,10 @@ import helpers
             ),
             (
                 "helpers.xe",
-                r#"
+                r"
 fun helper():
     return 1
-"#,
+",
             ),
         ],
     );
@@ -1163,25 +1163,25 @@ fn test_circular_imports_are_rejected() {
         &[
             (
                 "main.xe",
-                r#"
+                r"
 from a import run
 run()
-"#,
+",
             ),
             (
                 "a.xe",
-                r#"
+                r"
 import b
 
 fun run():
     return 0
-"#,
+",
             ),
             (
                 "b.xe",
-                r#"
+                r"
 import a
-"#,
+",
             ),
         ],
     );
@@ -1291,7 +1291,7 @@ fn test_game_of_life_example() {
 #[test]
 fn test_journal_example() {
     let id = get_unique_id();
-    let journal = std::env::temp_dir().join(format!("xe_journal_test_{}.txt", id));
+    let journal = std::env::temp_dir().join(format!("xe_journal_test_{id}.txt"));
     let _ = fs::remove_file(&journal);
     let run = |entries: &[&str]| {
         let output = xe_command()
@@ -1372,11 +1372,11 @@ if s[0] == "h":
 #[test]
 fn test_nested_list_iteration() {
     let output = run_xe(
-        r#"
+        r"
 matrix = [[1.0, 2.0], [3.0, 4.0]]
 for row in matrix:
     print(row)
-"#,
+",
     )
     .unwrap();
 
@@ -1386,10 +1386,10 @@ for row in matrix:
 #[test]
 fn test_native_list_out_of_bounds_runtime_error() {
     let result = run_xe(
-        r#"
+        r"
 items = [1.0, 2.0]
 print(items[5])
-"#,
+",
     );
 
     assert!(result.is_err());
@@ -1444,7 +1444,7 @@ fn test_mixed_indentation_spaces_and_tabs() {
 #[test]
 fn test_compile_does_not_destroy_existing_rs_file() {
     let id = get_unique_id();
-    let temp_dir = std::env::temp_dir().join(format!("xe_safety_test_{}", id));
+    let temp_dir = std::env::temp_dir().join(format!("xe_safety_test_{id}"));
     let _ = fs::create_dir_all(&temp_dir);
 
     let original_content = "// Original precious code that must not be deleted";
@@ -1501,18 +1501,18 @@ for k in m:
 
 #[test]
 fn test_list_index_mutation() {
-    let code = r#"
+    let code = r"
 arr = [10, 20, 30]
 arr[1] = 99
 print(arr[0], arr[1], arr[2])
-"#;
+";
     let output = run_xe(code).unwrap();
     assert_eq!(output, "10 99 30\n");
 }
 
 #[test]
 fn test_struct_definition_and_access() {
-    let code = r#"
+    let code = r"
 struct Point:
     x
     y
@@ -1521,7 +1521,7 @@ p = Point(10, 20)
 print(p.x, p.y)
 p.x = 42
 print(p.x, p.y)
-"#;
+";
     let output = run_xe(code).unwrap();
     assert_eq!(output, "10 20\n42 20\n");
 }
@@ -1654,14 +1654,14 @@ print(contains([n1], n2))
 
 #[test]
 fn test_function_mutating_global_list_is_visible_everywhere() {
-    let code = r#"
+    let code = r"
 items = []
 fun add(x):
     append(items, x)
 add(1)
 add(2)
 print(items)
-"#;
+";
     assert_eq!(run_xe(code).unwrap(), "[1, 2]\n");
 }
 
@@ -1687,12 +1687,12 @@ print(config)
 
 #[test]
 fn test_reading_global_before_local_assignment_is_compile_error() {
-    let code = r#"
+    let code = r"
 count = 0
 fun inc():
     count = count + 1
 inc()
-"#;
+";
     let err = run_xe(code).unwrap_err();
     assert!(err.contains("local variable 'count' is used before it is assigned"), "{}", err);
     assert!(err.contains("global count"), "{}", err);
@@ -1700,7 +1700,7 @@ inc()
 
 #[test]
 fn test_local_variable_can_shadow_global() {
-    let code = r#"
+    let code = r"
 i = 100
 fun f():
     i = 0
@@ -1708,7 +1708,7 @@ fun f():
         i = i + 1
     return i
 print(f(), i)
-"#;
+";
     assert_eq!(run_xe(code).unwrap(), "3 100\n");
 }
 
@@ -1723,7 +1723,7 @@ fn test_global_declaration_errors() {
 
 #[test]
 fn test_functions_see_globals_updated_in_top_level_blocks() {
-    let code = r#"
+    let code = r"
 total = 0
 items = []
 fun report():
@@ -1734,25 +1734,25 @@ while i < 3:
     append(items, i)
     i = i + 1
 report()
-"#;
+";
     assert_eq!(run_xe(code).unwrap(), "3 [0, 1, 2]\n");
 }
 
 #[test]
 fn test_global_used_before_assignment_is_runtime_error() {
-    let code = r#"
+    let code = r"
 fun show():
     print(late)
 show()
 late = 1
-"#;
+";
     let err = run_xe(code).unwrap_err();
     assert!(err.contains("variable 'late' was used before it was assigned"), "{}", err);
 }
 
 #[test]
 fn test_functions_without_return_value_produce_none() {
-    let code = r#"
+    let code = r"
 fun greet():
     x = 1
 fun sign(n):
@@ -1766,7 +1766,7 @@ print(greet())
 print(sign(5), sign(-1))
 print(early(0), early(3))
 print(type(greet()))
-"#;
+";
     assert_eq!(run_xe(code).unwrap(), "none\n1 none\nnone 3\nnone\n");
 }
 
@@ -1838,7 +1838,7 @@ print(h, data)
 
 #[test]
 fn test_forward_calls_and_rust_reserved_names() {
-    let code = r#"
+    let code = r"
 fun f(x):
     y = g(x)
     z = h()
@@ -1851,7 +1851,7 @@ fun keywords(unsafe, yield, None, self):
     match = unsafe + yield + None + self
     return match
 print(f(3), keywords(1, 2, 3, 4))
-"#;
+";
     assert_eq!(run_xe(code).unwrap(), "6 10\n");
 }
 
@@ -1869,7 +1869,7 @@ fn test_invalid_targets_and_parameters_are_compile_errors() {
 
 #[test]
 fn test_lists_maps_and_structs_are_shared_references() {
-    let code = r#"
+    let code = r"
 fun fill(items):
     items.append(99)
 a = [1]
@@ -1878,7 +1878,7 @@ fill(b)
 c = copy(a)
 c.append(5)
 print(a, b, c)
-"#;
+";
     assert_eq!(run_xe(code).unwrap(), "[1, 99] [1, 99] [1, 99, 5]\n");
 }
 
@@ -2067,7 +2067,7 @@ fn test_runtime_errors_report_location_and_syntax_errors_show_source() {
 #[test]
 fn test_program_arguments_and_exit_code() {
     let id = get_unique_id();
-    let temp_dir = std::env::temp_dir().join(format!("xe_args_test_{}", id));
+    let temp_dir = std::env::temp_dir().join(format!("xe_args_test_{id}"));
     let _ = fs::create_dir_all(&temp_dir);
     let file = temp_dir.join("args.xe");
     fs::write(&file, "print(args())\nexit(convert(args()[1], \"number\"))\n").unwrap();
@@ -2088,13 +2088,13 @@ fn test_program_arguments_and_exit_code() {
 #[test]
 fn test_recursive_functions_get_native_types() {
     let rust_code = compile_xe(
-        r#"
+        r"
 fun fib(n):
     if n <= 1:
         return n
     return fib(n - 1) + fib(n - 2)
 print(fib(20))
-"#,
+",
     )
     .unwrap();
     assert!(rust_code.contains("fn xe_m0_fib(mut l_n: f64) -> f64"), "{}", rust_code);
@@ -2105,8 +2105,8 @@ fn test_deep_nesting_error() {
     let cases = [
         format!("print({}1{})", "(".repeat(20000), ")".repeat(20000)),
         format!("print({})", vec!["1"; 50000].join("+")),
-        format!("x = {}1{}", "[".repeat(130), "]".repeat(130)),
-        format!("f = {}1", "lambda: ".repeat(130)),
+        format!("x = {}1{}", "[".repeat(1100), "]".repeat(1100)),
+        format!("f = {}1", "lambda: ".repeat(1100)),
         format!("print({}1)", "-".repeat(20000)),
     ];
     for source in cases {
@@ -2119,4 +2119,105 @@ fn test_deep_nesting_error() {
 fn test_moderate_nesting() {
     let source = format!("print({}1{})", "(".repeat(90), ")".repeat(90));
     assert_eq!(run_xe(&source).unwrap().trim(), "1");
+}
+
+#[test]
+fn test_long_flat_expressions() {
+    let sum = format!("print({})", vec!["1"; 500].join(" + "));
+    assert_eq!(run_xe(&sum).unwrap().trim(), "500");
+    let lists = format!("x = {}1{}\nprint(1)", "[".repeat(300), "]".repeat(300));
+    assert_eq!(run_xe(&lists).unwrap().trim(), "1");
+    let lambdas = format!("f = {}1\nprint(1)", "lambda: ".repeat(300));
+    assert_eq!(run_xe(&lambdas).unwrap().trim(), "1");
+}
+
+#[test]
+fn test_number_literal_too_large() {
+    let source = format!("print({})", "9".repeat(400));
+    assert!(run_xe(&source).unwrap_err().contains("invalid number"));
+}
+
+#[test]
+fn test_escaped_newline_in_string_is_unterminated() {
+    let err = run_xe("x = \"a\\\nb\"\nprint(x)\n").unwrap_err();
+    assert!(err.contains("unterminated string"));
+}
+
+#[test]
+fn test_input_keeps_surrounding_spaces() {
+    let output = run_xe_with_input("print(\"[\" + input() + \"]\")\n", "  hi  \r\n").unwrap();
+    assert_eq!(output.trim_end(), "[  hi  ]");
+}
+
+#[test]
+fn test_text_building_and_indexing() {
+    let source = r#"
+fun build(n):
+    s = ""
+    repeat n times:
+        s = s + "ab"
+    s = s + s
+    return s
+
+fun count(s, c):
+    total = 0
+    for i in range(length(s)):
+        if s[i] == c:
+            total = total + 1
+    return total
+
+t = ""
+repeat 3 times:
+    t = t + "é"
+t = t + t
+print(build(3), count(build(3), "a"), t, length(t), t[-1], t[1:3], t[4], "ab" < "b")
+word = build(2)
+print(word[0], word[1:3], word[-2:], length(word))
+"#;
+    assert_eq!(
+        run_xe(source).unwrap().trim(),
+        "abababababab 6 éééééé 6 é éé é true\na ba ab 8"
+    );
+}
+
+#[test]
+fn test_global_text_append_before_assignment_is_error() {
+    let source = r#"
+fun f():
+    global s
+    s = s + "x"
+f()
+s = ""
+"#;
+    assert!(run_xe(source).unwrap_err().contains("used before it was assigned"));
+}
+
+#[test]
+fn test_global_read_while_function_reassigns_it() {
+    let source = r#"
+fun change():
+    global s
+    s = "changed"
+    return "!"
+
+s = "start"
+print(s + change(), s)
+s = "start"
+print(change() + s)
+"#;
+    assert_eq!(run_xe(source).unwrap().trim(), "start! changed\n!changed");
+}
+
+#[test]
+fn test_map_remove_keeps_order() {
+    let source = r#"
+m = {}
+for i in range(50):
+    m[i] = i * 2
+for i in range(0, 50, 2):
+    remove(m, i)
+m[0] = "again"
+print(length(m), keys(m)[0], keys(m)[-1], m[49], m[0], has_key(m, 2))
+"#;
+    assert_eq!(run_xe(source).unwrap().trim(), "26 1 0 98 again false");
 }

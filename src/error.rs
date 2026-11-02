@@ -1,10 +1,11 @@
 use std::fmt;
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct Span {
     pub line: usize,
     pub column: usize,
-    pub source_name: Option<String>,
+    pub source_name: Option<Arc<str>>,
 }
 
 impl Span {
@@ -16,11 +17,11 @@ impl Span {
         }
     }
 
-    pub fn with_source(line: usize, column: usize, source_name: impl Into<String>) -> Self {
+    pub fn with_source(line: usize, column: usize, source_name: Arc<str>) -> Self {
         Self {
             line,
             column,
-            source_name: Some(source_name.into()),
+            source_name: Some(source_name),
         }
     }
 }
@@ -109,35 +110,34 @@ impl XeError {
 
     fn format_message(kind: &XeErrorKind) -> String {
         match kind {
-            XeErrorKind::UnexpectedCharacter(c) => format!("unexpected character '{}'", c),
+            XeErrorKind::UnexpectedCharacter(c) => format!("unexpected character '{c}'"),
             XeErrorKind::UnterminatedString => "unterminated string literal".to_string(),
-            XeErrorKind::InvalidNumber(s) => format!("invalid number '{}'", s),
-            XeErrorKind::UnexpectedToken(t) => format!("unexpected token '{}'", t),
-            XeErrorKind::ExpectedToken(t) => format!("expected '{}'", t),
+            XeErrorKind::InvalidNumber(s) => format!("invalid number '{s}'"),
+            XeErrorKind::UnexpectedToken(t) => format!("unexpected token '{t}'"),
+            XeErrorKind::ExpectedToken(t) => format!("expected '{t}'"),
             XeErrorKind::ExpectedExpression => "expected expression".to_string(),
             XeErrorKind::ExpectedIdentifier => "expected identifier".to_string(),
             XeErrorKind::InvalidIndentation => "invalid indentation".to_string(),
             XeErrorKind::NestingTooDeep => "expression nested too deeply".to_string(),
-            XeErrorKind::UndefinedVariable(name) => format!("undefined variable '{}'", name),
-            XeErrorKind::UndefinedFunction(name) => format!("undefined function '{}'", name),
+            XeErrorKind::UndefinedVariable(name) => format!("undefined variable '{name}'"),
+            XeErrorKind::UndefinedFunction(name) => format!("undefined function '{name}'"),
             XeErrorKind::WrongArgumentCount {
                 name,
                 expected,
                 got,
             } => {
                 format!(
-                    "function '{}' expects {} arguments, got {}",
-                    name, expected, got
+                    "function '{name}' expects {expected} arguments, got {got}"
                 )
             }
             XeErrorKind::TypeMismatch { expected, got } => {
-                format!("type mismatch: expected {}, got {}", expected, got)
+                format!("type mismatch: expected {expected}, got {got}")
             }
             XeErrorKind::CannotRedefineBuiltin(name) => {
-                format!("cannot redefine built-in function '{}'", name)
+                format!("cannot redefine built-in function '{name}'")
             }
             XeErrorKind::DuplicateFunction(name) => {
-                format!("function '{}' is already defined", name)
+                format!("function '{name}' is already defined")
             }
             XeErrorKind::ReturnOutsideFunction => {
                 "return can only be used inside a function".to_string()
@@ -147,10 +147,10 @@ impl XeError {
                 "continue can only be used inside a loop".to_string()
             }
             XeErrorKind::ModuleNotFound(module) => {
-                format!("module '{}' could not be found", module)
+                format!("module '{module}' could not be found")
             }
             XeErrorKind::CircularImport(path) => {
-                format!("circular import detected: {}", path)
+                format!("circular import detected: {path}")
             }
             XeErrorKind::ImportNotTopLevel => {
                 "import statements are only allowed at the top level".to_string()
@@ -159,15 +159,14 @@ impl XeError {
                 "import statements must appear before executable top-level statements".to_string()
             }
             XeErrorKind::ImportedNameNotFound { module, name } => {
-                format!("module '{}' does not export '{}'", module, name)
+                format!("module '{module}' does not export '{name}'")
             }
             XeErrorKind::DuplicateImport(name) => {
-                format!("'{}' is imported more than once", name)
+                format!("'{name}' is imported more than once")
             }
             XeErrorKind::ImportNameConflict(name) => {
                 format!(
-                    "imported name '{}' conflicts with an existing name in this module",
-                    name
+                    "imported name '{name}' conflicts with an existing name in this module"
                 )
             }
             XeErrorKind::GlobalOutsideFunction => {
@@ -175,27 +174,24 @@ impl XeError {
             }
             XeErrorKind::InvalidGlobal(msg) => msg.clone(),
             XeErrorKind::LocalUsedBeforeAssignment(name) => format!(
-                "local variable '{0}' is used before it is assigned; '{0}' is assigned in this function, so it is local here. Add 'global {0}' to use the module-level variable",
-                name
+                "local variable '{name}' is used before it is assigned; '{name}' is assigned in this function, so it is local here. Add 'global {name}' to use the module-level variable"
             ),
             XeErrorKind::DuplicateParameter(name) => {
-                format!("duplicate parameter or field name '{}'", name)
+                format!("duplicate parameter or field name '{name}'")
             }
             XeErrorKind::InvalidAssignmentTarget(msg) => msg.clone(),
             XeErrorKind::ModuleUsedAsValue(name) => format!(
-                "module '{}' cannot be used as a value; access its members like '{}.name'",
-                name, name
+                "module '{name}' cannot be used as a value; access its members like '{name}.name'"
             ),
-            XeErrorKind::NotCallable(what) => format!("{} is not a function", what),
+            XeErrorKind::NotCallable(what) => format!("{what} is not a function"),
             XeErrorKind::MaybeUnassigned(name) => format!(
-                "variable '{}' might not be assigned yet; assign it on every path before using it",
-                name
+                "variable '{name}' might not be assigned yet; assign it on every path before using it"
             ),
             XeErrorKind::NestedDefinition => {
                 "functions and structs can only be defined at the top level of a module; use 'lambda' for inline functions".to_string()
             }
             XeErrorKind::InvalidOperation(msg) => msg.clone(),
-            XeErrorKind::IoError(msg) => format!("I/O error: {}", msg),
+            XeErrorKind::IoError(msg) => format!("I/O error: {msg}"),
         }
     }
 
@@ -215,7 +211,7 @@ impl XeError {
                     None => format!("Error at {}: {}", span, self.message),
                 };
 
-                format!("{}\n{}\n{}^", header, line_text, caret_padding)
+                format!("{header}\n{line_text}\n{caret_padding}^")
             }
             None => self.to_string(),
         }

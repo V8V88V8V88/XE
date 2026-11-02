@@ -1,5 +1,6 @@
 // XE runtime. This file is copied verbatim to the top of every compiled XE program;
 // the generated code after it defines `XE_LOCATIONS` and calls `xe_start`.
+#![recursion_limit = "4096"]
 #![allow(
     dead_code,
     unused_mut,
@@ -85,38 +86,56 @@ impl fmt::Display for XeItem<'_> {
 /// An insertion-ordered map.
 #[derive(Clone, Default)]
 struct XeMap {
-    entries: Vec<(XeKey, XeValue)>,
+    entries: Vec<Option<(XeKey, XeValue)>>,
     index: HashMap<XeKey, usize>,
 }
 
 impl XeMap {
     fn get(&self, key: &XeKey) -> Option<&XeValue> {
-        self.index.get(key).map(|&i| &self.entries[i].1)
+        self.index
+            .get(key)
+            .and_then(|&i| self.entries[i].as_ref())
+            .map(|(_, value)| value)
     }
 
     fn insert(&mut self, key: XeKey, value: XeValue) {
         match self.index.get(&key) {
-            Some(&i) => self.entries[i].1 = value,
+            Some(&i) => {
+                if let Some(entry) = &mut self.entries[i] {
+                    entry.1 = value;
+                }
+            }
             None => {
                 self.index.insert(key.clone(), self.entries.len());
-                self.entries.push((key, value));
+                self.entries.push(Some((key, value)));
             }
         }
     }
 
     fn remove(&mut self, key: &XeKey) -> Option<XeValue> {
         let i = self.index.remove(key)?;
-        let (_, value) = self.entries.remove(i);
-        for position in self.index.values_mut() {
-            if *position > i {
-                *position -= 1;
-            }
+        let (_, value) = self.entries[i].take()?;
+        if self.entries.len() > 2 * self.index.len() + 8 {
+            self.compact();
         }
         Some(value)
     }
 
+    fn compact(&mut self) {
+        self.entries.retain(Option::is_some);
+        for (i, entry) in self.entries.iter().enumerate() {
+            if let Some((key, _)) = entry {
+                *self.index.get_mut(key).unwrap() = i;
+            }
+        }
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &(XeKey, XeValue)> {
+        self.entries.iter().flatten()
+    }
+
     fn len(&self) -> usize {
-        self.entries.len()
+        self.index.len()
     }
 }
 
@@ -259,13 +278,13 @@ fn xe_function(
     name: &str,
     min_args: usize,
     max_args: Option<usize>,
-    call: impl Fn(Vec<XeValue>) -> XeValue + 'static,
+    call: Box<dyn Fn(Vec<XeValue>) -> XeValue>,
 ) -> XeValue {
     XeValue::Function(Rc::new(XeFunction {
         name: name.to_string(),
         min_args,
         max_args,
-        call: Box::new(call),
+        call,
     }))
 }
 
@@ -344,7 +363,7 @@ impl fmt::Display for XeValue {
             }),
             XeValue::Map(map) => xe_display_once(f, Rc::as_ptr(map) as usize, "{...}", |f| {
                 write!(f, "{{")?;
-                for (i, (key, value)) in map.borrow().entries.iter().enumerate() {
+                for (i, (key, value)) in map.borrow().iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
@@ -442,6 +461,21 @@ fn xe_gget<T: Clone + 'static>(key: &'static XeGlobal<T>, name: &str) -> T {
     key.with(|cell| match &*cell.borrow() {
         Some(value) => value.clone(),
         None => xe_runtime_error(&format!("variable '{}' was used before it was assigned", name)),
+    })
+}
+
+fn xe_gref<T: 'static, R>(key: &'static XeGlobal<T>, name: &str, body: impl FnOnce(&T) -> R) -> R {
+    key.with(|cell| match &*cell.borrow() {
+        Some(value) => body(value),
+        None => xe_runtime_error(&format!("variable '{}' was used before it was assigned", name)),
+    })
+}
+
+fn xe_gappend(key: &'static XeGlobal<String>, text: &str) {
+    key.with(|cell| {
+        if let Some(value) = &mut *cell.borrow_mut() {
+            value.push_str(text);
+        }
     })
 }
 
@@ -576,7 +610,7 @@ fn xe_eq(left: &XeValue, right: &XeValue) -> bool {
             xe_eq_once(Rc::as_ptr(a) as usize, Rc::as_ptr(b) as usize, || {
                 let (a, b) = (a.borrow(), b.borrow());
                 a.len() == b.len()
-                    && a.entries
+                    && a
                         .iter()
                         .all(|(key, value)| b.get(key).is_some_and(|other| xe_eq(value, other)))
             })
@@ -679,11 +713,7 @@ fn xe_index(object: &XeValue, index: &XeValue) -> XeValue {
             let position = xe_position(items.len(), xe_index_number(index, "list"), "list");
             items[position].clone()
         }
-        XeValue::Text(text) => {
-            let chars: Vec<char> = text.chars().collect();
-            let position = xe_position(chars.len(), xe_index_number(index, "text"), "text");
-            XeValue::Text(chars[position].to_string())
-        }
+        XeValue::Text(text) => xe_text_index(text, index),
         XeValue::Map(map) => {
             let key = XeKey::from_value(index);
             map.borrow()
@@ -700,6 +730,29 @@ fn xe_index(object: &XeValue, index: &XeValue) -> XeValue {
         }
         other => xe_runtime_error(&format!("cannot index into a {} value", other.type_name())),
     }
+}
+
+fn xe_text_index(text: &str, index: &XeValue) -> XeValue {
+    let index = xe_index_number(index, "text");
+    if text.is_ascii() {
+        let position = xe_position(text.len(), index, "text");
+        return XeValue::Text(text[position..=position].to_string());
+    }
+    let position = xe_position(text.chars().count(), index, "text");
+    XeValue::Text(text.chars().nth(position).unwrap().to_string())
+}
+
+fn xe_text_slice(text: &str, start: Option<f64>, end: Option<f64>) -> String {
+    if text.is_ascii() {
+        let (start, end) = xe_slice_range(text.len(), start, end);
+        return text[start..end].to_string();
+    }
+    let (start, end) = xe_slice_range(text.chars().count(), start, end);
+    text.chars().skip(start).take(end - start).collect()
+}
+
+fn xe_text_length(text: &str) -> f64 {
+    text.chars().count() as f64
 }
 
 fn xe_set_index(object: &XeValue, index: XeValue, value: XeValue) {
@@ -780,11 +833,7 @@ fn xe_slice(object: &XeValue, start: Option<f64>, end: Option<f64>) -> XeValue {
             let (start, end) = xe_slice_range(items.len(), start, end);
             xe_list(items[start..end].to_vec())
         }
-        XeValue::Text(text) => {
-            let chars: Vec<char> = text.chars().collect();
-            let (start, end) = xe_slice_range(chars.len(), start, end);
-            XeValue::Text(chars[start..end].iter().collect())
-        }
+        XeValue::Text(text) => XeValue::Text(xe_text_slice(text, start, end)),
         other => xe_runtime_error(&format!("cannot slice a {} value", other.type_name())),
     }
 }
@@ -798,7 +847,7 @@ fn xe_iter(value: &XeValue) -> Vec<XeValue> {
     match value {
         XeValue::List(items) => items.borrow().clone(),
         XeValue::Text(s) => s.chars().map(|c| XeValue::Text(c.to_string())).collect(),
-        XeValue::Map(map) => map.borrow().entries.iter().map(|(k, _)| k.to_value()).collect(),
+        XeValue::Map(map) => map.borrow().iter().map(|(k, _)| k.to_value()).collect(),
         XeValue::Struct(object) => object
             .borrow()
             .fields
@@ -872,7 +921,8 @@ fn xe_builtin_input(prompt: &str) -> String {
     let _ = io::stdout().flush();
     let mut input = String::new();
     let _ = io::stdin().lock().read_line(&mut input);
-    input.trim().to_string()
+    input.truncate(input.trim_end_matches(['\n', '\r']).len());
+    input
 }
 
 fn xe_builtin_length(value: &XeValue) -> f64 {
@@ -964,7 +1014,7 @@ fn xe_builtin_keys(value: &XeValue) -> XeValue {
 
 fn xe_builtin_values(value: &XeValue) -> XeValue {
     match value {
-        XeValue::Map(map) => xe_list(map.borrow().entries.iter().map(|(_, v)| v.clone()).collect()),
+        XeValue::Map(map) => xe_list(map.borrow().iter().map(|(_, v)| v.clone()).collect()),
         XeValue::Struct(object) => {
             xe_list(object.borrow().fields.iter().map(|(_, v)| v.clone()).collect())
         }

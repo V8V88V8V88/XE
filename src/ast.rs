@@ -60,7 +60,7 @@ impl fmt::Display for XeType {
             XeType::Boolean => write!(f, "boolean"),
             XeType::List => write!(f, "list"),
             XeType::Map => write!(f, "map"),
-            XeType::Struct(name) => write!(f, "struct {}", name),
+            XeType::Struct(name) => write!(f, "struct {name}"),
             XeType::Function => write!(f, "function"),
             XeType::Void => write!(f, "none"),
             XeType::Unknown => write!(f, "unknown"),

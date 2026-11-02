@@ -18,7 +18,7 @@ fn get_unique_id() -> u64 {
 
 fn run_xe(source: &str) -> Result<String, String> {
     let id = get_unique_id();
-    let temp_dir = std::env::temp_dir().join(format!("xe_test_sys_{}", id));
+    let temp_dir = std::env::temp_dir().join(format!("xe_test_sys_{id}"));
     let _ = fs::create_dir_all(&temp_dir);
 
     let xe_file = temp_dir.join("input.xe");
@@ -42,13 +42,13 @@ fn run_xe(source: &str) -> Result<String, String> {
 #[test]
 fn test_native_list_optimization() {
     let result = run_xe(
-        r#"
+        r"
 items = [1.0, 2.0, 3.0]
 total = 0.0
 for item in items:
     total = total + item
 print(total)
-"#,
+",
     );
     assert_eq!(result.unwrap(), "6");
 }
@@ -67,10 +67,10 @@ print(items)
 #[test]
 fn test_native_matrix_indexing() {
     let result = run_xe(
-        r#"
+        r"
 matrix = [[1.0, 2.0], [3.0, 4.0]]
 print(matrix[1][0])
-"#,
+",
     );
     assert_eq!(result.unwrap(), "3");
 }
@@ -78,7 +78,7 @@ print(matrix[1][0])
 #[test]
 fn test_native_function_inference_and_call() {
     let result = run_xe(
-        r#"
+        r"
 fun double(n):
     return n * 2
 
@@ -86,7 +86,7 @@ fun quadruple(n):
     return double(double(n))
 
 print(quadruple(5))
-"#,
+",
     );
     assert_eq!(result.unwrap(), "20");
 }
@@ -105,12 +105,12 @@ print("Hello " + name + "!")
 #[test]
 fn test_large_numeric_loop_performance_correctness() {
     let result = run_xe(
-        r#"
+        r"
 total = 0
 repeat 100 times:
     total = total + 1
 print(total)
-"#,
+",
     );
     assert_eq!(result.unwrap(), "100");
 }
