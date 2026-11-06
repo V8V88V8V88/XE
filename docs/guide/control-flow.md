@@ -94,6 +94,41 @@ for ch in "XE":
 
 For text, each iteration variable receives a one-character text value.
 
+A loop can unpack each item into several variables. `items`, `enumerate` and `zip` produce pairs that work well with this:
+
+```xe
+ages = {"Ada": 36, "Bob": 25}
+for name, age in items(ages):
+    print(name, age)
+
+for i, fruit in enumerate(["apple", "pear"], 1):
+    print(i, fruit)
+
+for name, score in zip(["Ada", "Bob"], [90, 85]):
+    print(name, score)
+```
+
+## Conditional expressions
+
+`a if condition else b` picks one of two values:
+
+```xe
+label = "adult" if age >= 18 else "minor"
+```
+
+## Comprehensions
+
+A comprehension builds a list or map from a loop in one expression:
+
+```xe
+squares = [n * n for n in range(5)]            # [0, 1, 4, 9, 16]
+evens = [n for n in range(10) if n % 2 == 0]
+lengths = {word: length(word) for word in ["hi", "there"]}
+total = sum(n for n in range(101))             # 5050
+```
+
+The loop variables of a comprehension are only visible inside it.
+
 ## `break`
 
 `break` exits the nearest loop immediately.

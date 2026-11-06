@@ -108,7 +108,7 @@ These are not part of the language right now:
 
 - `const` declarations
 - multi-line strings
-- list comprehensions
+- format specifications in f-strings, such as `{x:.2f}`
 
 ## Next steps
 

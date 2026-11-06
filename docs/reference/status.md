@@ -15,6 +15,15 @@ The compiler provides a complete pipeline from `.xe` source to a native binary, 
 *   **Functions as Values**: Functions can be passed around and returned, and `lambda` creates anonymous functions.
 *   **Developer Interface**: The `xe` CLI manages the full workflow: `xe run` for rapid testing, `xe compile` for optimized builds, and `xe install` to manage the environment.
 
+## Coming in the next release
+
+*   **f-strings**: `f"Hello {name}, total {a + b}"` builds text from expressions.
+*   **Struct Methods**: Functions defined inside a `struct` are methods (`p.move(1)`). Calls on values known to be structs compile to direct native calls. Struct fields can have default values.
+*   **Default and Keyword Arguments**: `fun greet(name, greeting = "Hello")` and `greet(greeting = "Hi", name = "Ada")`, for functions, methods, struct constructors and function values.
+*   **Unpacking**: `a, b = b, a`, `return x, y`, `for key, value in items(m):`, and the new `items`, `enumerate` and `zip` built-ins.
+*   **Conditional Expressions**: `"adult" if age >= 18 else "minor"`.
+*   **Comprehensions**: `[x * x for x in xs if x > 0]`, `{k: v for k, v in items(m)}` and `sum(x for x in xs)`.
+
 ## New in v0.2.1
 
 *   **Faster Text and Maps**: Building text with `s = s + x` appends in place, indexing and slicing ASCII text no longer copies it, and `remove()` on a map no longer slows down with its size. Each of these went from seconds to under 0.1 s on 40,000 to 200,000 items.
@@ -60,5 +69,6 @@ The compiler provides a complete pipeline from `.xe` source to a native binary, 
 The following areas are currently under development or not yet implemented:
 
 *   **Nested Definitions**: Functions and structs must be defined at the top level; use `lambda` for inline functions. Lambdas copy the variables they use when they are created.
-*   **Standard Library**: There is no networking, and no list comprehensions yet.
+*   **Standard Library**: There is no networking or JSON support yet.
+*   **f-strings**: Format specifications such as `{x:.2f}` are not supported yet.
 *   **Concurrency**: There is currently no support for threads or asynchronous execution.

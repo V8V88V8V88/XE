@@ -756,3 +756,78 @@ Generation 1
 ......
 ......
 ```
+
+### Library
+
+Source: `examples/library.xe`
+
+A small library catalog: a struct with default field values and methods, f-strings, conditional expressions, keyword arguments, returning and unpacking two values, `enumerate`, `items`, and list and map comprehensions.
+
+```xe
+struct Book:
+    title
+    author
+    year
+    copies = 1
+    loaned = 0
+
+    fun available(self):
+        return self.copies - self.loaned
+
+    fun lend(self, count = 1):
+        if count > self.available():
+            error(f"only {self.available()} of '{self.title}' left")
+        self.loaned += count
+        return self
+
+    fun describe(self):
+        status = "available" if self.available() > 0 else "all loaned"
+        return f"{self.title} by {self.author} ({self.year}), {status}"
+
+fun oldest_and_newest(books):
+    years = [book.year for book in books]
+    return min(years), max(years)
+
+books = [
+    Book("Dune", "Frank Herbert", 1965, copies = 3),
+    Book("Neuromancer", "William Gibson", 1984),
+    Book("Hyperion", "Dan Simmons", 1989, copies = 2),
+]
+
+books[1].lend()
+books[0].lend(count = 2)
+
+for i, book in enumerate(books, 1):
+    print(f"{i}. {book.describe()}")
+
+oldest, newest = oldest_and_newest(books)
+print(f"Years: {oldest} to {newest}")
+
+by_author = {book.author: book.title for book in books}
+for author, title in items(by_author):
+    print(f"{author} wrote {title}")
+
+in_stock = [book.title for book in books if book.available() > 0]
+print("In stock:", join(in_stock, ", "))
+print("Total copies:", sum(book.copies for book in books))
+
+try:
+    books[1].lend()
+catch err:
+    print("Could not lend:", err)
+```
+
+Output:
+
+```text
+1. Dune by Frank Herbert (1965), available
+2. Neuromancer by William Gibson (1984), all loaned
+3. Hyperion by Dan Simmons (1989), available
+Years: 1965 to 1989
+Frank Herbert wrote Dune
+William Gibson wrote Neuromancer
+Dan Simmons wrote Hyperion
+In stock: Dune, Hyperion
+Total copies: 6
+Could not lend: only 0 of 'Neuromancer' left
+```

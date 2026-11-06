@@ -1,6 +1,6 @@
 use crate::ast::*;
 use crate::error::{Span, XeError, XeErrorKind, XeResult};
-use crate::lexer::{Token, TokenKind};
+use crate::lexer::{FStringPart, Lexer, Token, TokenKind};
 
 pub struct Parser {
     tokens: Vec<Token>,
@@ -75,6 +75,10 @@ impl Parser {
         // Assignment, augmented assignment, or expression statement
         let expr = self.parse_expression()?;
 
+        if self.check(&TokenKind::Comma) {
+            return self.parse_tuple_statement(expr, span);
+        }
+
         let op = match self.peek_kind() {
             TokenKind::Equal => None,
             kind => match augmented_operator(kind) {
@@ -89,7 +93,7 @@ impl Parser {
             },
         };
         self.advance(); // consume '=' or 'op='
-        let value = self.parse_expression()?;
+        let value = self.parse_expression_list()?;
         self.expect_statement_end()?;
 
         let kind = match expr.kind {
@@ -132,6 +136,78 @@ impl Parser {
         };
 
         Ok(Statement { kind, span })
+    }
+
+    fn parse_tuple_statement(&mut self, first: Expression, span: Span) -> XeResult<Statement> {
+        let mut items = vec![first];
+        while self.match_token(&TokenKind::Comma) {
+            if self.check(&TokenKind::Equal) || self.at_statement_end() {
+                break;
+            }
+            items.push(self.parse_expression()?);
+        }
+
+        if augmented_operator(self.peek_kind()).is_some() {
+            return Err(XeError::new(
+                XeErrorKind::Syntax("augmented assignment like '+=' needs a single target".to_string()),
+                Some(self.current_span()),
+            ));
+        }
+
+        if !self.match_token(&TokenKind::Equal) {
+            self.expect_statement_end()?;
+            return Ok(Statement {
+                kind: StatementKind::Expression(Expression {
+                    kind: ExpressionKind::List(items),
+                    span: span.clone(),
+                }),
+                span,
+            });
+        }
+
+        for target in &items {
+            if !matches!(
+                target.kind,
+                ExpressionKind::Identifier(_) | ExpressionKind::Index { .. } | ExpressionKind::FieldAccess { .. }
+            ) {
+                return Err(XeError::new(
+                    XeErrorKind::ExpectedToken("valid assignment target".to_string()),
+                    Some(target.span.clone()),
+                ));
+            }
+        }
+        let value = self.parse_expression_list()?;
+        self.expect_statement_end()?;
+        Ok(Statement {
+            kind: StatementKind::Unpack {
+                targets: items,
+                value,
+            },
+            span,
+        })
+    }
+
+    fn parse_expression_list(&mut self) -> XeResult<Expression> {
+        let span = self.current_span();
+        let first = self.parse_expression()?;
+        if !self.check(&TokenKind::Comma) {
+            return Ok(first);
+        }
+        let mut items = vec![first];
+        while self.match_token(&TokenKind::Comma) {
+            if self.at_statement_end() {
+                break;
+            }
+            items.push(self.parse_expression()?);
+        }
+        Ok(Expression {
+            kind: ExpressionKind::List(items),
+            span,
+        })
+    }
+
+    fn at_statement_end(&self) -> bool {
+        self.check(&TokenKind::Newline) || self.check(&TokenKind::Dedent) || self.is_at_end()
     }
 
     fn parse_import_statement(&mut self) -> XeResult<Statement> {
@@ -186,10 +262,23 @@ impl Parser {
         self.expect(&TokenKind::LeftParen)?;
 
         let mut params = Vec::new();
-        if !self.check(&TokenKind::RightParen) {
-            params.push(self.expect_identifier()?);
-            while self.match_token(&TokenKind::Comma) {
-                params.push(self.expect_identifier()?);
+        let mut defaults = Vec::new();
+        while !self.check(&TokenKind::RightParen) {
+            let param_span = self.current_span();
+            let param = self.expect_identifier()?;
+            if self.match_token(&TokenKind::Equal) {
+                defaults.push(self.parse_expression()?);
+            } else if !defaults.is_empty() {
+                return Err(XeError::new(
+                    XeErrorKind::Syntax(format!(
+                        "parameter '{param}' without a default value cannot follow a parameter with one"
+                    )),
+                    Some(param_span),
+                ));
+            }
+            params.push(param);
+            if !self.match_token(&TokenKind::Comma) {
+                break;
             }
         }
         self.expect(&TokenKind::RightParen)?;
@@ -199,7 +288,12 @@ impl Parser {
         let body = self.parse_block()?;
 
         Ok(Statement {
-            kind: StatementKind::FunctionDef { name, params, body },
+            kind: StatementKind::FunctionDef {
+                name,
+                params,
+                defaults,
+                body,
+            },
             span,
         })
     }
@@ -214,18 +308,47 @@ impl Parser {
 
         self.expect(&TokenKind::Indent)?;
         let mut fields = Vec::new();
+        let mut defaults = Vec::new();
+        let mut methods = Vec::new();
         while !self.check(&TokenKind::Dedent) && !self.check(&TokenKind::Eof) {
             if self.match_token(&TokenKind::Newline) {
                 continue;
             }
+            if self.check(&TokenKind::Function) {
+                methods.push(self.parse_function_def()?);
+                continue;
+            }
+            if self.check(&TokenKind::Pass) {
+                self.advance();
+                self.expect_statement_end()?;
+                continue;
+            }
+            let field_span = self.current_span();
             let field_name = self.expect_identifier()?;
+            if self.match_token(&TokenKind::Equal) {
+                defaults.push(self.parse_expression()?);
+            } else if !defaults.is_empty() {
+                return Err(XeError::new(
+                    XeErrorKind::Syntax(format!(
+                        "field '{field_name}' without a default value cannot follow a field with one"
+                    )),
+                    Some(field_span),
+                ));
+            }
             fields.push(field_name);
             self.expect_statement_end()?;
         }
-        self.expect(&TokenKind::Dedent)?;
+        if self.check(&TokenKind::Dedent) {
+            self.advance();
+        }
 
         Ok(Statement {
-            kind: StatementKind::StructDef { name, fields },
+            kind: StatementKind::StructDef {
+                name,
+                fields,
+                defaults,
+                methods,
+            },
             span,
         })
     }
@@ -299,7 +422,7 @@ impl Parser {
         let span = self.current_span();
         self.advance(); // consume 'for'
 
-        let variable = self.expect_identifier()?;
+        let variables = self.parse_loop_variables()?;
         self.expect(&TokenKind::In)?;
         let iterable = self.parse_expression()?;
         self.expect(&TokenKind::Colon)?;
@@ -309,12 +432,27 @@ impl Parser {
 
         Ok(Statement {
             kind: StatementKind::For {
-                variable,
+                variables,
                 iterable,
                 body,
             },
             span,
         })
+    }
+
+    fn parse_loop_variables(&mut self) -> XeResult<Vec<String>> {
+        let parenthesized = self.match_token(&TokenKind::LeftParen);
+        let mut variables = vec![self.expect_identifier()?];
+        while self.match_token(&TokenKind::Comma) {
+            if self.check(&TokenKind::In) || self.check(&TokenKind::RightParen) {
+                break;
+            }
+            variables.push(self.expect_identifier()?);
+        }
+        if parenthesized {
+            self.expect(&TokenKind::RightParen)?;
+        }
+        Ok(variables)
     }
 
     fn parse_try_statement(&mut self) -> XeResult<Statement> {
@@ -352,7 +490,7 @@ impl Parser {
             && !self.check(&TokenKind::Dedent)
             && !self.is_at_end()
         {
-            Some(self.parse_expression()?)
+            Some(self.parse_expression_list()?)
         } else {
             None
         };
@@ -401,10 +539,52 @@ impl Parser {
         let result = if self.check(&TokenKind::Lambda) {
             self.parse_lambda()
         } else {
-            self.parse_binary_expression(0)
+            self.parse_conditional()
         };
         self.depth = saved;
         result
+    }
+
+    fn parse_conditional(&mut self) -> XeResult<Expression> {
+        let then_value = self.parse_binary_expression(0)?;
+        if !self.check(&TokenKind::If) {
+            return Ok(then_value);
+        }
+        self.advance();
+        let condition = self.parse_binary_expression(0)?;
+        self.expect(&TokenKind::Else)?;
+        let else_value = self.parse_expression()?;
+        let span = then_value.span.clone();
+        Ok(Expression {
+            kind: ExpressionKind::Conditional {
+                condition: Box::new(condition),
+                then_value: Box::new(then_value),
+                else_value: Box::new(else_value),
+            },
+            span,
+        })
+    }
+
+    fn parse_comprehension_clauses(&mut self) -> XeResult<Vec<ComprehensionClause>> {
+        let mut clauses = Vec::new();
+        while self.match_token(&TokenKind::For) {
+            let variables = self.parse_loop_variables()?;
+            self.expect(&TokenKind::In)?;
+            let iterable = self.parse_binary_expression(0)?;
+            clauses.push(ComprehensionClause::For { variables, iterable });
+            while self.match_token(&TokenKind::If) {
+                clauses.push(ComprehensionClause::If(self.parse_binary_expression(0)?));
+            }
+        }
+        Ok(clauses)
+    }
+
+    fn comprehension(&mut self, kind: ComprehensionKind, span: Span) -> XeResult<Expression> {
+        let clauses = self.parse_comprehension_clauses()?;
+        Ok(Expression {
+            kind: ExpressionKind::Comprehension { kind, clauses },
+            span,
+        })
     }
 
     fn parse_lambda(&mut self) -> XeResult<Expression> {
@@ -524,6 +704,7 @@ impl Parser {
                     ExpressionKind::FieldAccess { object, field } => ExpressionKind::MethodCall {
                         object,
                         method: field,
+                        function: None,
                         args,
                     },
                     kind => ExpressionKind::Call {
@@ -599,29 +780,83 @@ impl Parser {
             TokenKind::False => ExpressionKind::Boolean(false),
             TokenKind::None => ExpressionKind::None,
             TokenKind::Identifier(name) => ExpressionKind::Identifier(name.clone()),
+            TokenKind::FString(parts) => {
+                let parts = parts.clone();
+                self.advance();
+                return self.fstring(parts, span);
+            }
             TokenKind::LeftParen => {
                 self.advance();
+                if self.match_token(&TokenKind::RightParen) {
+                    return Ok(Expression {
+                        kind: ExpressionKind::List(Vec::new()),
+                        span,
+                    });
+                }
                 let expr = self.parse_expression()?;
+                let expr = if self.check(&TokenKind::For) {
+                    self.comprehension(ComprehensionKind::List(Box::new(expr)), span)?
+                } else if self.check(&TokenKind::Comma) {
+                    let mut items = vec![expr];
+                    while self.match_token(&TokenKind::Comma) {
+                        if self.check(&TokenKind::RightParen) {
+                            break;
+                        }
+                        items.push(self.parse_expression()?);
+                    }
+                    Expression {
+                        kind: ExpressionKind::List(items),
+                        span,
+                    }
+                } else {
+                    expr
+                };
                 self.expect(&TokenKind::RightParen)?;
                 return Ok(expr);
             }
             TokenKind::LeftBracket => {
                 self.advance();
-                let elements = self.parse_list_elements()?;
+                if self.match_token(&TokenKind::RightBracket) {
+                    return Ok(Expression {
+                        kind: ExpressionKind::List(Vec::new()),
+                        span,
+                    });
+                }
+                let first = self.parse_expression()?;
+                let expr = if self.check(&TokenKind::For) {
+                    self.comprehension(ComprehensionKind::List(Box::new(first)), span)?
+                } else {
+                    let elements = self.parse_list_elements(first)?;
+                    Expression {
+                        kind: ExpressionKind::List(elements),
+                        span,
+                    }
+                };
                 self.expect(&TokenKind::RightBracket)?;
-                return Ok(Expression {
-                    kind: ExpressionKind::List(elements),
-                    span,
-                });
+                return Ok(expr);
             }
             TokenKind::LeftBrace => {
                 self.advance();
-                let entries = self.parse_map_entries()?;
+                if self.match_token(&TokenKind::RightBrace) {
+                    return Ok(Expression {
+                        kind: ExpressionKind::Map(Vec::new()),
+                        span,
+                    });
+                }
+                let key = self.parse_expression()?;
+                self.expect(&TokenKind::Colon)?;
+                let value = self.parse_expression()?;
+                let expr = if self.check(&TokenKind::For) {
+                    self.comprehension(ComprehensionKind::Map(Box::new(key), Box::new(value)), span)?
+                } else {
+                    let entries = self.parse_map_entries(key, value)?;
+                    Expression {
+                        kind: ExpressionKind::Map(entries),
+                        span,
+                    }
+                };
                 self.expect(&TokenKind::RightBrace)?;
-                return Ok(Expression {
-                    kind: ExpressionKind::Map(entries),
-                    span,
-                });
+                return Ok(expr);
             }
             _ => return Err(XeError::new(XeErrorKind::ExpectedExpression, Some(span))),
         };
@@ -630,39 +865,122 @@ impl Parser {
     }
 
     fn parse_arguments(&mut self) -> XeResult<Vec<Expression>> {
-        let mut args = Vec::new();
-        if !self.check(&TokenKind::RightParen) {
-            args.push(self.parse_expression()?);
-            while self.match_token(&TokenKind::Comma) {
-                if self.check(&TokenKind::RightParen) {
+        let mut args: Vec<Expression> = Vec::new();
+        let mut keywords: Vec<String> = Vec::new();
+        while !self.check(&TokenKind::RightParen) {
+            let span = self.current_span();
+            if let TokenKind::Identifier(name) = self.peek_kind()
+                && self.peek_next_kind() == Some(&TokenKind::Equal)
+            {
+                let name = name.clone();
+                if keywords.contains(&name) {
+                    return Err(XeError::new(
+                        XeErrorKind::Syntax(format!("keyword argument '{name}' is given more than once")),
+                        Some(span),
+                    ));
+                }
+                self.advance();
+                self.advance();
+                let value = self.parse_expression()?;
+                keywords.push(name.clone());
+                args.push(Expression {
+                    kind: ExpressionKind::KeywordArg {
+                        name,
+                        value: Box::new(value),
+                    },
+                    span,
+                });
+            } else {
+                if !keywords.is_empty() {
+                    return Err(XeError::new(
+                        XeErrorKind::Syntax("positional argument cannot follow keyword arguments".to_string()),
+                        Some(span),
+                    ));
+                }
+                let arg = self.parse_expression()?;
+                if self.check(&TokenKind::For) && args.is_empty() {
+                    args.push(self.comprehension(ComprehensionKind::List(Box::new(arg)), span)?);
                     break;
                 }
-                args.push(self.parse_expression()?);
+                args.push(arg);
+            }
+            if !self.match_token(&TokenKind::Comma) {
+                break;
             }
         }
         Ok(args)
     }
 
-    fn parse_list_elements(&mut self) -> XeResult<Vec<Expression>> {
-        let mut elements = Vec::new();
-        if !self.check(&TokenKind::RightBracket) {
-            elements.push(self.parse_expression()?);
-            while self.match_token(&TokenKind::Comma) {
-                if self.check(&TokenKind::RightBracket) {
-                    break;
-                }
-                elements.push(self.parse_expression()?);
+    fn parse_list_elements(&mut self, first: Expression) -> XeResult<Vec<Expression>> {
+        let mut elements = vec![first];
+        while self.match_token(&TokenKind::Comma) {
+            if self.check(&TokenKind::RightBracket) {
+                break;
             }
+            elements.push(self.parse_expression()?);
         }
         Ok(elements)
     }
 
-    fn parse_map_entries(&mut self) -> XeResult<Vec<(Expression, Expression)>> {
+    fn fstring(&mut self, parts: Vec<FStringPart>, span: Span) -> XeResult<Expression> {
+        let mut result: Option<Expression> = match parts.first() {
+            Some(FStringPart::Literal(_)) => None,
+            _ => Some(Expression {
+                kind: ExpressionKind::String(String::new()),
+                span: span.clone(),
+            }),
+        };
+        for part in parts {
+            let piece = match part {
+                FStringPart::Literal(text) => Expression {
+                    kind: ExpressionKind::String(text),
+                    span: span.clone(),
+                },
+                FStringPart::Expression { source, line, column } => {
+                    self.parse_embedded(&source, span.source_name.clone(), line, column)?
+                }
+            };
+            result = Some(match result {
+                None => piece,
+                Some(left) => Expression {
+                    span: span.clone(),
+                    kind: ExpressionKind::BinaryOp {
+                        left: Box::new(left),
+                        op: BinaryOperator::Add,
+                        right: Box::new(piece),
+                    },
+                },
+            });
+        }
+        Ok(result.unwrap_or(Expression {
+            kind: ExpressionKind::String(String::new()),
+            span,
+        }))
+    }
+
+    fn parse_embedded(
+        &mut self,
+        source: &str,
+        source_name: Option<std::sync::Arc<str>>,
+        line: usize,
+        column: usize,
+    ) -> XeResult<Expression> {
+        let tokens = Lexer::new_embedded(source, source_name, line, column).tokenize()?;
+        let mut parser = Parser::new(tokens);
+        parser.depth = self.depth;
+        let expr = parser.parse_expression()?;
+        if !parser.is_at_end() {
+            return Err(XeError::new(
+                XeErrorKind::Syntax("unexpected text in f-string expression".to_string()),
+                Some(parser.current_span()),
+            ));
+        }
+        Ok(expr)
+    }
+
+    fn parse_map_entries(&mut self, key: Expression, value: Expression) -> XeResult<Vec<(Expression, Expression)>> {
         let mut entries = Vec::new();
-        if !self.check(&TokenKind::RightBrace) {
-            let key = self.parse_expression()?;
-            self.expect(&TokenKind::Colon)?;
-            let value = self.parse_expression()?;
+        {
             entries.push((key, value));
 
             while self.match_token(&TokenKind::Comma) {
@@ -836,6 +1154,7 @@ fn format_token_kind(kind: &TokenKind) -> &'static str {
     match kind {
         TokenKind::Number(_) => "number",
         TokenKind::String(_) => "string",
+        TokenKind::FString(_) => "f-string",
         TokenKind::True => "true",
         TokenKind::False => "false",
         TokenKind::Identifier(_) => "identifier",

@@ -29,6 +29,21 @@ fun greet(name):
 
 XE checks argument count during semantic analysis, so calling a function with the wrong number of arguments is a compiler error.
 
+## Default and keyword arguments
+
+A parameter can have a default value. Callers can leave it out or pass any argument by name:
+
+```xe
+fun connect(host, port = 80, secure = false):
+    return f"{host}:{port} secure={secure}"
+
+print(connect("example.com"))
+print(connect("example.com", secure = true))
+print(connect(port = 8080, host = "localhost"))
+```
+
+Parameters with defaults must come after the ones without, and keyword arguments must come after positional ones. A default is evaluated every time it is needed, so `fun add(item, items = [])` starts with a fresh list on each call.
+
 ## Return values
 
 Use `return` to send a value back to the caller.
@@ -36,6 +51,15 @@ Use `return` to send a value back to the caller.
 ```xe
 fun square(n):
     return n * n
+```
+
+To return several values, separate them with commas. The caller gets a list and can unpack it:
+
+```xe
+fun min_max(items):
+    return min(items), max(items)
+
+low, high = min_max([4, 9, 1])
 ```
 
 Current rules:
@@ -196,7 +220,7 @@ Functions and structs can only be defined at the top level of a module; use a la
 
 ## Method-call syntax
 
-`value.name(args)` is another way to write `name(value, args)`:
+Structs can define methods (see [Structs](/guide/types-and-values#structs)). For any other value, `value.name(args)` is another way to write `name(value, args)`:
 
 ```xe
 items = [3, 1, 2]

@@ -143,6 +143,11 @@ impl XeMap {
 struct XeStruct {
     name: String,
     fields: Vec<(String, XeValue)>,
+    methods: fn(&str) -> Option<XeValue>,
+}
+
+fn xe_no_methods(_: &str) -> Option<XeValue> {
+    None
 }
 
 impl XeStruct {
@@ -162,6 +167,8 @@ struct XeFunction {
     name: String,
     min_args: usize,
     max_args: Option<usize>,
+    params: Vec<&'static str>,
+    defaults: Vec<fn() -> XeValue>,
     call: Box<dyn Fn(Vec<XeValue>) -> XeValue>,
 }
 
@@ -262,7 +269,12 @@ fn xe_make_map(pairs: Vec<(XeValue, XeValue)>) -> XeValue {
     XeValue::Map(Rc::new(RefCell::new(map)))
 }
 
-fn xe_make_struct(name: &str, field_names: &[&str], values: Vec<XeValue>) -> XeValue {
+fn xe_make_struct(
+    name: &str,
+    field_names: &[&str],
+    values: Vec<XeValue>,
+    methods: fn(&str) -> Option<XeValue>,
+) -> XeValue {
     let fields = field_names
         .iter()
         .zip(values)
@@ -271,6 +283,7 @@ fn xe_make_struct(name: &str, field_names: &[&str], values: Vec<XeValue>) -> XeV
     XeValue::Struct(Rc::new(RefCell::new(XeStruct {
         name: name.to_string(),
         fields,
+        methods,
     })))
 }
 
@@ -284,13 +297,40 @@ fn xe_function(
         name: name.to_string(),
         min_args,
         max_args,
+        params: Vec::new(),
+        defaults: Vec::new(),
         call,
     }))
 }
 
-fn xe_call(callee: &XeValue, args: Vec<XeValue>) -> XeValue {
+fn xe_user_function(
+    name: &str,
+    params: Vec<&'static str>,
+    required: usize,
+    defaults: Vec<fn() -> XeValue>,
+    call: Box<dyn Fn(Vec<XeValue>) -> XeValue>,
+) -> XeValue {
+    XeValue::Function(Rc::new(XeFunction {
+        name: name.to_string(),
+        min_args: required,
+        max_args: Some(params.len()),
+        params,
+        defaults,
+        call,
+    }))
+}
+
+fn xe_call(callee: &XeValue, mut args: Vec<XeValue>) -> XeValue {
     match callee {
         XeValue::Function(function) => {
+            if args.len() >= function.min_args && args.len() < function.params.len() {
+                for i in args.len()..function.params.len() {
+                    match function.defaults.get(i - function.min_args) {
+                        Some(default) => args.push(default()),
+                        None => break,
+                    }
+                }
+            }
             let count = args.len();
             let too_few = count < function.min_args;
             let too_many = function.max_args.is_some_and(|max| count > max);
@@ -309,6 +349,100 @@ fn xe_call(callee: &XeValue, args: Vec<XeValue>) -> XeValue {
         }
         other => xe_runtime_error(&format!("a {} value is not a function", other.type_name())),
     }
+}
+
+fn xe_call_kw(callee: &XeValue, args: Vec<XeValue>, keywords: Vec<(&str, XeValue)>) -> XeValue {
+    let function = match callee {
+        XeValue::Function(function) => function,
+        other => xe_runtime_error(&format!("a {} value is not a function", other.type_name())),
+    };
+    if function.params.is_empty() {
+        xe_runtime_error(&format!(
+            "function '{}' does not accept keyword arguments",
+            function.name
+        ));
+    }
+    let total = function.params.len();
+    if args.len() > total {
+        xe_runtime_error(&format!(
+            "function '{}' expects at most {} arguments, got {}",
+            function.name,
+            total,
+            args.len()
+        ));
+    }
+    let mut slots: Vec<Option<XeValue>> = args.into_iter().map(Some).collect();
+    slots.resize(total, None);
+    for (name, value) in keywords {
+        match function.params.iter().position(|param| *param == name) {
+            None => xe_runtime_error(&format!(
+                "function '{}' has no parameter named '{}'",
+                function.name, name
+            )),
+            Some(index) if slots[index].is_some() => xe_runtime_error(&format!(
+                "argument '{}' of '{}' is given more than once",
+                name, function.name
+            )),
+            Some(index) => slots[index] = Some(value),
+        }
+    }
+    let args = slots
+        .into_iter()
+        .enumerate()
+        .map(|(index, slot)| match slot {
+            Some(value) => value,
+            None if index >= function.min_args => (function.defaults[index - function.min_args])(),
+            None => xe_runtime_error(&format!(
+                "missing argument '{}' in call to '{}'",
+                function.params[index], function.name
+            )),
+        })
+        .collect();
+    (function.call)(args)
+}
+
+fn xe_call_method(
+    object: XeValue,
+    name: &str,
+    args: Vec<XeValue>,
+    keywords: Vec<(&str, XeValue)>,
+    fallback: Option<XeValue>,
+) -> XeValue {
+    let method = match &object {
+        XeValue::Struct(value) => (value.borrow().methods)(name),
+        _ => None,
+    };
+    let (function, args) = match method.or(fallback) {
+        Some(function) => {
+            let mut full = Vec::with_capacity(args.len() + 1);
+            full.push(object);
+            full.extend(args);
+            (function, full)
+        }
+        None => (xe_get_field(&object, name), args),
+    };
+    if keywords.is_empty() {
+        xe_call(&function, args)
+    } else {
+        xe_call_kw(&function, args, keywords)
+    }
+}
+
+fn xe_unpack(value: XeValue, count: usize) -> Vec<XeValue> {
+    let items = match &value {
+        XeValue::List(_) | XeValue::Text(_) | XeValue::Map(_) => xe_iter(&value),
+        other => xe_runtime_error(&format!("cannot unpack a {} value", other.type_name())),
+    };
+    if items.len() != count {
+        let problem = if items.len() > count { "too many" } else { "not enough" };
+        xe_runtime_error(&format!(
+            "{} values to unpack (expected {}, got {})",
+            problem,
+            count,
+            items.len()
+        ));
+    }
+    items
 }
 
 // ---------------------------------------------------------------------------
@@ -1274,6 +1408,43 @@ fn xe_builtin_append_file(path: &str, text: &str) {
 
 fn xe_builtin_file_exists(path: &str) -> bool {
     std::path::Path::new(path).exists()
+}
+
+fn xe_builtin_items(value: &XeValue) -> XeValue {
+    let pair = |key: XeValue, value: XeValue| xe_list(vec![key, value]);
+    match value {
+        XeValue::Map(map) => xe_list(map.borrow().iter().map(|(k, v)| pair(k.to_value(), v.clone())).collect()),
+        XeValue::Struct(object) => xe_list(
+            object
+                .borrow()
+                .fields
+                .iter()
+                .map(|(name, v)| pair(XeValue::Text(name.clone()), v.clone()))
+                .collect(),
+        ),
+        other => xe_runtime_error(&format!("items() expected a map or struct, got {}", other.type_name())),
+    }
+}
+
+fn xe_builtin_enumerate(value: &XeValue, start: Option<f64>) -> XeValue {
+    let start = start.unwrap_or(0.0);
+    xe_list(
+        xe_iter(value)
+            .into_iter()
+            .enumerate()
+            .map(|(i, item)| xe_list(vec![XeValue::Number(start + i as f64), item]))
+            .collect(),
+    )
+}
+
+fn xe_builtin_zip(args: Vec<XeValue>) -> XeValue {
+    let sequences: Vec<Vec<XeValue>> = args.iter().map(xe_iter).collect();
+    let count = sequences.iter().map(Vec::len).min().unwrap_or(0);
+    xe_list(
+        (0..count)
+            .map(|i| xe_list(sequences.iter().map(|items| items[i].clone()).collect()))
+            .collect(),
+    )
 }
 
 fn xe_builtin_error(message: &XeValue) {
