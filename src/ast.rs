@@ -122,18 +122,25 @@ pub enum StatementKind {
         body: Vec<Statement>,
     },
     For {
-        variable: String,
+        variables: Vec<String>,
         iterable: Expression,
         body: Vec<Statement>,
     },
     FunctionDef {
         name: String,
         params: Vec<String>,
+        defaults: Vec<Expression>,
         body: Vec<Statement>,
     },
     StructDef {
         name: String,
         fields: Vec<String>,
+        defaults: Vec<Expression>,
+        methods: Vec<Statement>,
+    },
+    Unpack {
+        targets: Vec<Expression>,
+        value: Expression,
     },
     /// `object[index] = value`, or `object[index] op= value` when `op` is set.
     IndexAssignment {
@@ -203,6 +210,7 @@ pub enum ExpressionKind {
     MethodCall {
         object: Box<Expression>,
         method: String,
+        function: Option<String>,
         args: Vec<Expression>,
     },
     /// Call of any other expression, e.g. `make_adder(1)(2)`.
@@ -231,6 +239,35 @@ pub enum ExpressionKind {
         object: Box<Expression>,
         field: String,
     },
+
+    Conditional {
+        condition: Box<Expression>,
+        then_value: Box<Expression>,
+        else_value: Box<Expression>,
+    },
+    Comprehension {
+        kind: ComprehensionKind,
+        clauses: Vec<ComprehensionClause>,
+    },
+    KeywordArg {
+        name: String,
+        value: Box<Expression>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum ComprehensionKind {
+    List(Box<Expression>),
+    Map(Box<Expression>, Box<Expression>),
+}
+
+#[derive(Debug, Clone)]
+pub enum ComprehensionClause {
+    For {
+        variables: Vec<String>,
+        iterable: Expression,
+    },
+    If(Expression),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -354,14 +391,14 @@ pub enum TypedStatementKind {
         body: Vec<TypedStatement>,
     },
     For {
-        variable: String,
-        variable_type: XeType,
+        variables: Vec<(String, XeType)>,
         iterable: TypedExpression,
         body: Vec<TypedStatement>,
     },
     FunctionDef {
         name: String,
         params: Vec<(String, XeType)>,
+        defaults: Vec<TypedExpression>,
         /// Variables assigned in the body (excluding parameters and loop variables).
         locals: Vec<(String, XeType)>,
         body: Vec<TypedStatement>,
@@ -370,6 +407,13 @@ pub enum TypedStatementKind {
     StructDef {
         name: String,
         fields: Vec<String>,
+        defaults: Vec<TypedExpression>,
+        methods: Vec<(String, String)>,
+    },
+    Unpack {
+        value: TypedExpression,
+        count: usize,
+        assignments: Vec<TypedStatement>,
     },
     IndexAssignment {
         object: TypedExpression,
@@ -436,6 +480,7 @@ pub enum TypedExpressionKind {
     FunctionCall {
         name: String,
         args: Vec<TypedExpression>,
+        order: Vec<usize>,
     },
     BuiltinCall {
         builtin: Builtin,
@@ -445,7 +490,20 @@ pub enum TypedExpressionKind {
     DynamicCall {
         callee: Box<TypedExpression>,
         args: Vec<TypedExpression>,
+        keywords: Vec<(String, TypedExpression)>,
     },
+    MethodCall {
+        object: Box<TypedExpression>,
+        method: String,
+        args: Vec<TypedExpression>,
+        keywords: Vec<(String, TypedExpression)>,
+        fallback: Option<Box<TypedExpression>>,
+    },
+    DefaultArg {
+        function: String,
+        index: usize,
+    },
+    UnpackItem(usize),
     Lambda {
         params: Vec<String>,
         /// Enclosing local variables the body uses, copied when the lambda is created.
@@ -470,11 +528,50 @@ pub enum TypedExpressionKind {
         field: String,
     },
 
+    Conditional {
+        condition: Box<TypedExpression>,
+        then_value: Box<TypedExpression>,
+        else_value: Box<TypedExpression>,
+    },
+    Comprehension {
+        kind: TypedComprehensionKind,
+        clauses: Vec<TypedComprehensionClause>,
+    },
+
     /// The truthiness of any value, used for conditions.
     Truthy(Box<TypedExpression>),
     // Coercion nodes (The "Wrap/Unwrap" nodes)
     Wrap(Box<TypedExpression>),           // Native -> XeValue (Dynamic)
     Unwrap(Box<TypedExpression>, XeType), // Any type -> the given type (runtime-checked)
+}
+
+#[derive(Debug, Clone)]
+pub enum TypedComprehensionKind {
+    List(Box<TypedExpression>),
+    Map(Box<TypedExpression>, Box<TypedExpression>),
+}
+
+#[derive(Debug, Clone)]
+pub enum TypedComprehensionClause {
+    For {
+        variables: Vec<(String, XeType)>,
+        iterable: TypedExpression,
+    },
+    If(TypedExpression),
+}
+
+pub fn method_symbol(struct_symbol: &str, method: &str) -> String {
+    format!("xe_s_{}{}_{}", struct_symbol.len(), struct_symbol, method)
+}
+
+pub fn split_method_symbol(symbol: &str) -> Option<(&str, &str)> {
+    let rest = symbol.strip_prefix("xe_s_")?;
+    let digits = rest.len() - rest.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    let length: usize = rest[..digits].parse().ok()?;
+    let rest = &rest[digits..];
+    let struct_symbol = rest.get(..length)?;
+    let method = rest[length..].strip_prefix('_')?;
+    Some((struct_symbol, method))
 }
 
 /// Whether executing this block is guaranteed to hit a `return`.

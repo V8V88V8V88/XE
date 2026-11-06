@@ -2221,3 +2221,355 @@ print(length(m), keys(m)[0], keys(m)[-1], m[49], m[0], has_key(m, 2))
 "#;
     assert_eq!(run_xe(source).unwrap().trim(), "26 1 0 98 again false");
 }
+
+#[test]
+fn test_fstrings() {
+    let source = r#"
+name = "XE"
+n = 3.5
+items = [1, "a"]
+print(f"hi {name}, n={n}, list={items}, {{braces}} {n * 2}")
+print(f"{name}", F"{length(name)}", f"", f"plain")
+print(f"nested {f"{name}!"} and {"q"} and {items[1]}")
+t = f"{n}"
+t += "!"
+print(t, type(t))
+"#;
+    assert_eq!(
+        run_xe(source).unwrap().trim(),
+        "hi XE, n=3.5, list=[1, \"a\"], {braces} 7\nXE 2  plain\nnested XE! and q and a\n3.5! text"
+    );
+}
+
+#[test]
+fn test_fstring_errors() {
+    let cases = [
+        ("print(f\"{x:.2f}\")", "format specifications"),
+        ("print(f\"a } b\")", "single '}'"),
+        ("print(f\"a {} b\")", "empty expression"),
+        ("print(f\"a {1 +} b\")", "expected expression"),
+        ("print(f\"abc)", "unterminated string"),
+    ];
+    for (source, expected) in cases {
+        let err = run_xe(&format!("x = 1\n{source}\n")).unwrap_err();
+        assert!(err.contains(expected), "{source}: {err}");
+    }
+}
+
+#[test]
+fn test_default_and_keyword_arguments() {
+    let source = r#"
+fun greet(who, greeting = "Hello", punct = "!"):
+    return greeting + ", " + who + punct
+
+print(greet("Ada"))
+print(greet("Ada", "Hi"))
+print(greet("Ada", punct = "?"))
+print(greet(punct = ".", who = "Bob", greeting = "Yo"))
+g = greet
+print(g("Cy"), g("Cy", punct = "~"))
+
+fun add(item, bucket = []):
+    bucket.append(item)
+    return bucket
+print(add(1), add(2))
+
+BASE = 10
+fun plus(x, b = BASE):
+    return x + b
+print(plus(1))
+BASE = 20
+print(plus(1))
+"#;
+    assert_eq!(
+        run_xe(source).unwrap().trim(),
+        "Hello, Ada!\nHi, Ada!\nHello, Ada?\nYo, Bob.\nHello, Cy! Hello, Cy~\n[1] [2]\n11\n21"
+    );
+}
+
+#[test]
+fn test_keyword_arguments_evaluate_in_source_order() {
+    let source = r#"
+fun show(a, b):
+    print(a, b)
+fun one():
+    print("one")
+    return 1
+fun two():
+    print("two")
+    return 2
+show(b = two(), a = one())
+"#;
+    assert_eq!(run_xe(source).unwrap().trim(), "two\none\n1 2");
+}
+
+#[test]
+fn test_argument_errors() {
+    let cases = [
+        ("fun f(a):\n    return a\nprint(f(b = 1))", "has no parameter named 'b'"),
+        ("fun f(a):\n    return a\nprint(f(1, a = 2))", "given more than once"),
+        ("fun f(a, b = 1):\n    return a\nprint(f(b = 2))", "missing argument 'a'"),
+        ("fun f(a, b = 1):\n    return a\nprint(f(1, 2, 3))", "expects 1 to 2 arguments, got 3"),
+        ("fun f(a = 1, b):\n    return a", "without a default value"),
+        ("fun f(a, b):\n    return a\nf(a = 1, 2)", "positional argument cannot follow"),
+        ("print(1, sep = \"\")", "does not accept keyword arguments"),
+        ("f = lambda a: a\nprint(f(a = 1))", "does not accept keyword arguments"),
+        ("fun f(a):\n    return a\nh = f\nprint(h(z = 1))", "has no parameter named 'z'"),
+    ];
+    for (source, expected) in cases {
+        let err = run_xe(source).unwrap_err();
+        assert!(err.contains(expected), "{source}: {err}");
+    }
+}
+
+#[test]
+fn test_struct_methods() {
+    let source = r#"
+struct Point:
+    x = 0
+    y = 0
+
+    fun norm2(self):
+        return self.x * self.x + self.y * self.y
+
+    fun move(self, dx, dy = 0):
+        self.x += dx
+        self.y += dy
+        return self
+
+    fun show(self):
+        return "Point(" + convert(self.x, "text") + ", " + convert(self.y, "text") + ")"
+
+p = Point(3, 4)
+print(p.norm2())
+print(p.move(1).show())
+print(Point().show(), Point(y = 7).show())
+
+fun describe(thing):
+    return thing.show()
+
+print(describe(Point(1, 2)), describe(p.move(dy = 10, dx = 0)))
+
+struct Node:
+    value
+    next = none
+    fun total(self):
+        if self.next == none:
+            return self.value
+        return self.value + self.next.total()
+
+print(Node(1, Node(2, Node(3))).total())
+"#;
+    assert_eq!(
+        run_xe(source).unwrap().trim(),
+        "25\nPoint(4, 4)\nPoint(0, 0) Point(0, 7)\nPoint(1, 2) Point(4, 14)\n6"
+    );
+}
+
+#[test]
+fn test_struct_methods_and_functions_with_the_same_name() {
+    let source = r#"
+fun show(x):
+    return "function " + convert(x, "text")
+
+struct P:
+    x
+    fun show(self):
+        return "method"
+
+struct H:
+    callback
+    fun run(self):
+        return self.callback(2)
+
+fun use(o):
+    return o.show()
+
+fun call_field(o):
+    return o.callback(4)
+
+h = H(lambda v: v * 10)
+print(use(P(1)), use(5), P(2).show(), show(3))
+print(h.run(), h.callback(3), call_field(h))
+items = [3, 1, 2]
+items.sort()
+print(items, "ab".upper())
+"#;
+    assert_eq!(
+        run_xe(source).unwrap().trim(),
+        "method function 5 method function 3\n20 30 40\n[1, 2, 3] AB"
+    );
+}
+
+#[test]
+fn test_struct_method_errors() {
+    let cases = [
+        ("struct P:\n    x\n    fun bad():\n        return 1", "first parameter"),
+        ("struct P:\n    x\n    fun x(self):\n        return 1", "duplicate parameter or field name 'x'"),
+        ("struct P:\n    x\n    fun bad(self):\n        return self.y", "P.y"),
+        ("struct P:\n    x = 1\n    y", "without a default value"),
+        (
+            "struct P:\n    x\n    fun f(self, k):\n        return k\nfun call(o):\n    return o.f()\ncall(P(1))",
+            "function 'P.f' expects 2 arguments, got 1",
+        ),
+    ];
+    for (source, expected) in cases {
+        let err = run_xe(source).unwrap_err();
+        assert!(err.contains(expected), "{source}: {err}");
+    }
+}
+
+#[test]
+fn test_struct_methods_across_modules() {
+    let output = run_xe_project(
+        "main.xe",
+        &[
+            (
+                "main.xe",
+                "from shapes import Square\nimport shapes\ns = Square(3)\nprint(s.area(), s.scaled(k = 2).area(), shapes.Square(1).area())\n",
+            ),
+            (
+                "shapes.xe",
+                "struct Square:\n    side\n    fun area(self):\n        return self.side * self.side\n    fun scaled(self, k = 1):\n        return Square(self.side * k)\n",
+            ),
+        ],
+    )
+    .unwrap();
+    assert_eq!(output.trim(), "9 36 1");
+}
+
+#[test]
+fn test_typed_method_calls_are_direct() {
+    let source = r#"
+struct V:
+    x
+    y
+    fun dot(self, o):
+        return self.x * o.x + self.y * o.y
+
+v = V(1, 2)
+print(v.dot(v))
+"#;
+    let rust_code = compile_xe(source).unwrap();
+    let program = rust_code.split("// Program").nth(1).unwrap();
+    assert!(program.contains("V_dot(mut l_self: XeValue, mut l_o: XeValue) -> f64"), "{}", program);
+    assert!(!program.contains("xe_call_method("), "{}", program);
+    assert_eq!(run_xe(source).unwrap().trim(), "5");
+}
+
+#[test]
+fn test_tuple_unpacking() {
+    let source = r#"
+a, b = 1, 2
+a, b = b, a
+print(a, b)
+
+fun divmod2(x, y):
+    return x // y, x % y
+
+q, r = divmod2(17, 5)
+print(q, r, divmod2(9, 2))
+
+grid = [[0, 0], [0, 0]]
+grid[0][1], grid[1][0] = 5, 6
+print(grid)
+
+struct P:
+    x
+    y
+p = P(0, 0)
+p.x, p.y = 9, 8
+print(p)
+
+points = []
+points.append((1, 2))
+points.append((3, 4))
+for x, y in points:
+    print(x + y)
+print(())
+
+fun inside():
+    first, rest = "a", [1]
+    return first + convert(rest, "text")
+print(inside())
+"#;
+    assert_eq!(
+        run_xe(source).unwrap().trim(),
+        "2 1\n3 2 [4, 1]\n[[0, 5], [6, 0]]\nP { x: 9, y: 8 }\n3\n7\n[]\na[1]"
+    );
+}
+
+#[test]
+fn test_unpacking_errors() {
+    assert!(run_xe("a, b = [1, 2, 3]").unwrap_err().contains("too many values to unpack (expected 2, got 3)"));
+    assert!(run_xe("a, b, c = [1, 2]").unwrap_err().contains("not enough values to unpack (expected 3, got 2)"));
+    assert!(run_xe("for a, b in range(3):\n    print(a)").unwrap_err().contains("cannot unpack the items of a range"));
+    assert!(run_xe("a = 1\nb = 2\na, b += 1").unwrap_err().contains("needs a single target"));
+    let source = "try:\n    a, b = 1\ncatch e:\n    print(\"caught:\", e)\n";
+    assert_eq!(run_xe(source).unwrap().trim(), "caught: cannot unpack a number value");
+}
+
+#[test]
+fn test_items_enumerate_zip() {
+    let source = r#"
+m = {"one": 1, "two": 2}
+for k, v in items(m):
+    print(k, v)
+for i, ch in enumerate("ab", 1):
+    print(i, ch)
+for x, y in zip([1, 2, 3], ["a", "b"]):
+    print(x, y)
+print(enumerate(["x"]), items(m), zip([1], [2], [3]))
+"#;
+    assert_eq!(
+        run_xe(source).unwrap().trim(),
+        "one 1\ntwo 2\n1 a\n2 b\n1 a\n2 b\n[[0, \"x\"]] [[\"one\", 1], [\"two\", 2]] [[1, 2, 3]]"
+    );
+}
+
+#[test]
+fn test_conditional_expressions() {
+    let source = r#"
+age = 20
+print("adult" if age >= 18 else "minor")
+print(1 if false else 2 if false else 3)
+label = "big" if age > 100 else "small"
+print(label + "!")
+mixed = 1 if age > 100 else "one"
+print(mixed)
+f = lambda n: "even" if n % 2 == 0 else "odd"
+print(f(4), f(5))
+"#;
+    assert_eq!(run_xe(source).unwrap().trim(), "adult\n3\nsmall!\none\neven odd");
+}
+
+#[test]
+fn test_comprehensions() {
+    let source = r#"
+m = {"one": 1, "two": 2}
+print([x * x for x in range(5)])
+print([x for x in range(10) if x % 2 == 0 if x > 2])
+print([(i, j) for i in range(3) for j in range(i)])
+print({k: v * 10 for k, v in items(m)})
+print(sum(x for x in range(101)))
+print([w.upper() for w in "a b c".split()])
+x = 100
+ys = [x for x in range(3)]
+print(x, ys)
+fun f():
+    total = 5
+    return [total + i for i in range(3)]
+print(f())
+fs = [lambda v: v + i for i in range(3)]
+print([g(10) for g in fs])
+rows = [
+    [c for c in word]
+    for word in ["ab", "cd"]
+]
+print(rows)
+"#;
+    assert_eq!(
+        run_xe(source).unwrap().trim(),
+        "[0, 1, 4, 9, 16]\n[4, 6, 8]\n[[1, 0], [2, 0], [2, 1]]\n{\"one\": 10, \"two\": 20}\n5050\n[\"A\", \"B\", \"C\"]\n100 [0, 1, 2]\n[5, 6, 7]\n[10, 11, 12]\n[[\"a\", \"b\"], [\"c\", \"d\"]]"
+    );
+}

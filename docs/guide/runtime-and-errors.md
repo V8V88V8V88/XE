@@ -126,7 +126,6 @@ print(convert([1, 2], "number"))
 
 - no constants
 - no networking, threads or async
-- no list comprehensions
 - functions and structs must be defined at the top level (use `lambda` inside functions)
 - lambdas copy the variables they use when they are created
 

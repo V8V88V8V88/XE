@@ -52,7 +52,12 @@ name = "XE"
 print("Hello " + name)
 ```
 
-The `+` operator can also join text values.
+The `+` operator can also join text values. f-strings put values directly into text:
+
+```xe
+age = 36
+print(f"{name} is {age} years old")
+```
 
 ## Booleans
 
@@ -264,7 +269,9 @@ XE has built-in functions for text (`upper`, `split`, `replace`, ...), lists (`a
 - Typing: inferred; known numbers, text and booleans compile to native values
 - Control flow: `if`, `elif`, `else`, `repeat N times`, `while`, `for ... in ...`, `try` / `catch`
 - Loop control: `break`, `continue`, `pass`
-- Functions: `fun name(args):`, `return`, and `lambda`
+- Functions: `fun name(args):`, default and keyword arguments, `return`, and `lambda`
+- Structs: fields with defaults and methods
+- Expressions: f-strings, `a if c else b`, comprehensions and unpacking (`a, b = b, a`)
 - Blocks: indentation with spaces, not braces
 
 For the more detailed version of each topic, continue with:

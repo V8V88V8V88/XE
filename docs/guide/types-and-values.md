@@ -67,6 +67,16 @@ print(length(word), word[1], word[-1], word[1:3]) # 5 é o él
 print("apple" < "banana")                        # true
 ```
 
+f-strings put values into text. Any expression can go inside `{}`:
+
+```xe
+name = "Ada"
+score = 41
+print(f"{name} scored {score + 1} points")
+```
+
+Use `{{` and `}}` for literal braces.
+
 Text functions: `upper`, `lower`, `trim`, `replace(text, old, new)`, `split(text)`, `split(text, separator)`, `join(list, separator)`, `starts_with`, `ends_with`, `find(text, part)`. Text cannot be changed in place; these return new text.
 
 ## Booleans and truthiness
@@ -163,6 +173,36 @@ print(Point(1, 2) == Point(1, 2)) # true: structs compare by value
 ```
 
 Assigning a field that the struct does not declare is an error.
+
+Fields can have defaults, and constructors accept field names as keyword arguments:
+
+```xe
+struct Account:
+    owner
+    balance = 0
+
+a = Account("Ada")
+b = Account(owner = "Bob", balance = 50)
+```
+
+Functions written inside a struct are its methods. The first parameter, usually called `self`, is the struct the method was called on:
+
+```xe
+struct Account:
+    owner
+    balance = 0
+
+    fun deposit(self, amount):
+        self.balance += amount
+        return self
+
+    fun describe(self):
+        return f"{self.owner}: {self.balance}"
+
+a = Account("Ada")
+a.deposit(30).deposit(12)
+print(a.describe()) # Ada: 42
+```
 
 ## Conversion rules
 

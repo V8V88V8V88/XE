@@ -47,6 +47,7 @@ pub enum XeErrorKind {
     ExpectedIdentifier,
     InvalidIndentation,
     NestingTooDeep,
+    Syntax(String),
 
     // Semantic errors
     UndefinedVariable(String),
@@ -119,6 +120,7 @@ impl XeError {
             XeErrorKind::ExpectedIdentifier => "expected identifier".to_string(),
             XeErrorKind::InvalidIndentation => "invalid indentation".to_string(),
             XeErrorKind::NestingTooDeep => "expression nested too deeply".to_string(),
+            XeErrorKind::Syntax(msg) => msg.clone(),
             XeErrorKind::UndefinedVariable(name) => format!("undefined variable '{name}'"),
             XeErrorKind::UndefinedFunction(name) => format!("undefined function '{name}'"),
             XeErrorKind::WrongArgumentCount {
@@ -231,6 +233,36 @@ impl std::error::Error for XeError {}
 
 /// Removes the module prefix the linker adds to names (`xe_m0_add` -> `add`).
 pub fn demangle(text: &str) -> String {
+    demangle_modules(&demangle_methods(text))
+}
+
+fn demangle_methods(text: &str) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(position) = rest.find("xe_s_") {
+        output.push_str(&rest[..position]);
+        let candidate = &rest[position..];
+        let end = candidate
+            .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .unwrap_or(candidate.len());
+        match crate::ast::split_method_symbol(&candidate[..end]) {
+            Some((struct_symbol, method)) => {
+                output.push_str(&demangle_modules(struct_symbol));
+                output.push('.');
+                output.push_str(method);
+                rest = &candidate[end..];
+            }
+            None => {
+                output.push_str("xe_s_");
+                rest = &candidate[5..];
+            }
+        }
+    }
+    output.push_str(rest);
+    output
+}
+
+fn demangle_modules(text: &str) -> String {
     let mut output = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(position) = rest.find("xe_m") {

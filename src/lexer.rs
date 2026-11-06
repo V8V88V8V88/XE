@@ -3,10 +3,21 @@ use std::sync::Arc;
 use crate::error::{Span, XeError, XeErrorKind, XeResult};
 
 #[derive(Debug, Clone, PartialEq)]
+pub enum FStringPart {
+    Literal(String),
+    Expression {
+        source: String,
+        line: usize,
+        column: usize,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     // Literals
     Number(f64),
     String(String),
+    FString(Vec<FStringPart>),
     True,
     False,
 
@@ -126,6 +137,20 @@ impl Lexer {
         }
     }
 
+    pub fn new_embedded(source: &str, source_name: Option<Arc<str>>, line: usize, column: usize) -> Self {
+        Self {
+            source: source.chars().collect(),
+            source_name,
+            pos: 0,
+            line,
+            column,
+            indent_stack: vec![0],
+            pending_tokens: Vec::new(),
+            at_line_start: false,
+            delimiter_depth: 1,
+        }
+    }
+
     pub fn tokenize(&mut self) -> XeResult<Vec<Token>> {
         let mut tokens = Vec::new();
 
@@ -214,6 +239,10 @@ impl Lexer {
             return self.scan_string();
         }
 
+        if (c == 'f' || c == 'F') && self.peek_next() == '"' {
+            return self.scan_fstring();
+        }
+
         // Numbers
         if c.is_ascii_digit() {
             return self.scan_number();
@@ -286,21 +315,7 @@ impl Lexer {
                 ));
             }
             if self.peek() == '\\' {
-                self.advance();
-                if self.is_at_end() || self.peek() == '\n' || self.peek() == '\r' {
-                    return Err(XeError::new(
-                        XeErrorKind::UnterminatedString,
-                        Some(self.make_span(start_line, start_column)),
-                    ));
-                }
-                match self.peek() {
-                    'n' => value.push('\n'),
-                    't' => value.push('\t'),
-                    'r' => value.push('\r'),
-                    '\\' => value.push('\\'),
-                    '"' => value.push('"'),
-                    _ => value.push(self.peek()),
-                }
+                self.scan_escape(&mut value, start_line, start_column)?;
             } else {
                 value.push(self.peek());
             }
@@ -316,6 +331,159 @@ impl Lexer {
 
         self.advance(); // consume closing quote
         Ok(self.make_token(TokenKind::String(value), start_line, start_column))
+    }
+
+    fn scan_escape(&mut self, value: &mut String, start_line: usize, start_column: usize) -> XeResult<()> {
+        self.advance();
+        if self.is_at_end() || self.peek() == '\n' || self.peek() == '\r' {
+            return Err(XeError::new(
+                XeErrorKind::UnterminatedString,
+                Some(self.make_span(start_line, start_column)),
+            ));
+        }
+        match self.peek() {
+            'n' => value.push('\n'),
+            't' => value.push('\t'),
+            'r' => value.push('\r'),
+            '\\' => value.push('\\'),
+            '"' => value.push('"'),
+            _ => value.push(self.peek()),
+        }
+        Ok(())
+    }
+
+    fn scan_fstring(&mut self) -> XeResult<Token> {
+        let start_line = self.line;
+        let start_column = self.column;
+        self.advance();
+        self.advance();
+
+        let unterminated = |lexer: &Self| {
+            XeError::new(
+                XeErrorKind::UnterminatedString,
+                Some(lexer.make_span(start_line, start_column)),
+            )
+        };
+
+        let mut parts = Vec::new();
+        let mut literal = String::new();
+        loop {
+            if self.is_at_end() || self.peek() == '\n' || self.peek() == '\r' {
+                return Err(unterminated(self));
+            }
+            match self.peek() {
+                '"' => {
+                    self.advance();
+                    break;
+                }
+                '\\' => {
+                    self.scan_escape(&mut literal, start_line, start_column)?;
+                    self.advance();
+                }
+                '{' if self.peek_next() == '{' => {
+                    literal.push('{');
+                    self.advance();
+                    self.advance();
+                }
+                '}' if self.peek_next() == '}' => {
+                    literal.push('}');
+                    self.advance();
+                    self.advance();
+                }
+                '}' => {
+                    return Err(XeError::new(
+                        XeErrorKind::Syntax(
+                            "single '}' is not allowed in an f-string; use '}}' for a literal brace".to_string(),
+                        ),
+                        Some(self.make_span(self.line, self.column)),
+                    ));
+                }
+                '{' => {
+                    if !literal.is_empty() {
+                        parts.push(FStringPart::Literal(std::mem::take(&mut literal)));
+                    }
+                    let brace_column = self.column;
+                    self.advance();
+                    let line = self.line;
+                    let column = self.column;
+                    let source = self.scan_fstring_expression(start_line, start_column)?;
+                    if source.trim().is_empty() {
+                        return Err(XeError::new(
+                            XeErrorKind::Syntax("empty expression in f-string".to_string()),
+                            Some(self.make_span(line, brace_column)),
+                        ));
+                    }
+                    parts.push(FStringPart::Expression { source, line, column });
+                }
+                c => {
+                    literal.push(c);
+                    self.advance();
+                }
+            }
+        }
+        if !literal.is_empty() {
+            parts.push(FStringPart::Literal(literal));
+        }
+
+        Ok(self.make_token(TokenKind::FString(parts), start_line, start_column))
+    }
+
+    fn scan_fstring_expression(&mut self, start_line: usize, start_column: usize) -> XeResult<String> {
+        let mut source = String::new();
+        let mut depth = 0usize;
+        loop {
+            if self.is_at_end() || self.peek() == '\n' || self.peek() == '\r' {
+                return Err(XeError::new(
+                    XeErrorKind::UnterminatedString,
+                    Some(self.make_span(start_line, start_column)),
+                ));
+            }
+            let c = self.peek();
+            match c {
+                '"' => {
+                    source.push(c);
+                    self.advance();
+                    while !self.is_at_end() && self.peek() != '"' && self.peek() != '\n' {
+                        if self.peek() == '\\' {
+                            source.push('\\');
+                            self.advance();
+                            if self.is_at_end() || self.peek() == '\n' {
+                                break;
+                            }
+                        }
+                        source.push(self.peek());
+                        self.advance();
+                    }
+                    if self.peek() != '"' {
+                        return Err(XeError::new(
+                            XeErrorKind::UnterminatedString,
+                            Some(self.make_span(start_line, start_column)),
+                        ));
+                    }
+                    source.push('"');
+                    self.advance();
+                    continue;
+                }
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' => depth = depth.saturating_sub(1),
+                '}' if depth > 0 => depth -= 1,
+                '}' => {
+                    self.advance();
+                    return Ok(source);
+                }
+                ':' if depth == 0 => {
+                    return Err(XeError::new(
+                        XeErrorKind::Syntax(
+                            "format specifications like {x:.2f} are not supported in f-strings yet; use round(x, 2)".to_string(),
+                        ),
+                        Some(self.make_span(self.line, self.column)),
+                    ));
+                }
+                _ => {}
+            }
+            source.push(c);
+            self.advance();
+        }
     }
 
     fn scan_number(&mut self) -> XeResult<Token> {
@@ -503,6 +671,10 @@ impl Lexer {
 
     fn peek(&self) -> char {
         self.source.get(self.pos).copied().unwrap_or('\0')
+    }
+
+    fn peek_next(&self) -> char {
+        self.source.get(self.pos + 1).copied().unwrap_or('\0')
     }
 
     fn advance(&mut self) {

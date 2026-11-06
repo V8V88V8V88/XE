@@ -253,10 +253,30 @@ impl ModuleCompiler {
 
             for statement in &module.program.statements {
                 let kind = match &statement.kind {
-                    StatementKind::FunctionDef { .. } => self.rewrite_function_def(statement, &resolver)?,
-                    StatementKind::StructDef { name, fields } => StatementKind::StructDef {
+                    StatementKind::FunctionDef { name, .. } => {
+                        self.rewrite_function_def(statement, module.exports[name].clone(), &resolver)?
+                    }
+                    StatementKind::StructDef {
+                        name,
+                        fields,
+                        defaults,
+                        methods,
+                    } => StatementKind::StructDef {
                         name: module.exports[name].clone(),
                         fields: fields.clone(),
+                        defaults: self.rewrite_defaults(defaults, &resolver)?,
+                        methods: methods
+                            .iter()
+                            .map(|method| {
+                                let StatementKind::FunctionDef { name, .. } = &method.kind else {
+                                    unreachable!("struct methods are function definitions");
+                                };
+                                Ok(Statement {
+                                    kind: self.rewrite_function_def(method, name.clone(), &resolver)?,
+                                    span: method.span.clone(),
+                                })
+                            })
+                            .collect::<Result<_, XeError>>()?,
                     },
                     _ => continue,
                 };
@@ -383,12 +403,23 @@ impl ModuleCompiler {
             .cloned()
     }
 
+    fn rewrite_defaults(&self, defaults: &[Expression], resolver: &Resolver) -> Result<Vec<Expression>, XeError> {
+        self.rewrite_expressions(defaults, resolver, &[HashSet::new()], None)
+    }
+
     fn rewrite_function_def(
         &self,
         statement: &Statement,
+        linked_name: String,
         resolver: &Resolver,
     ) -> Result<StatementKind, XeError> {
-        let StatementKind::FunctionDef { name, params, body } = &statement.kind else {
+        let StatementKind::FunctionDef {
+            name,
+            params,
+            defaults,
+            body,
+        } = &statement.kind
+        else {
             unreachable!("rewrite_function_def called on a non-function statement");
         };
 
@@ -404,12 +435,14 @@ impl ModuleCompiler {
             }
         }
 
+        let defaults = self.rewrite_defaults(defaults, resolver)?;
         let mut scopes = vec![HashSet::new(), params.iter().cloned().collect()];
         let rewritten_body = self.rewrite_statement_block(body, resolver, &mut scopes, Some(&ctx))?;
 
         Ok(StatementKind::FunctionDef {
-            name: resolver.module.exports[name].clone(),
+            name: linked_name,
             params: params.clone(),
+            defaults,
             body: rewritten_body,
         })
     }
@@ -494,11 +527,9 @@ impl ModuleCompiler {
 
     /// The linked name for `object.method(...)` called as a function: a function of
     /// this module, an imported function, or a builtin. Variables are not methods.
-    fn resolve_method(&self, method: &str, resolver: &Resolver) -> String {
-        match self.module_symbol(method, resolver) {
-            Some(symbol) if !self.variable_symbols.contains(&symbol) => symbol,
-            _ => method.to_string(),
-        }
+    fn resolve_method(&self, method: &str, resolver: &Resolver) -> Option<String> {
+        self.module_symbol(method, resolver)
+            .filter(|symbol| !self.variable_symbols.contains(symbol))
     }
 
     /// If `expression` is `module.member` (possibly followed by more fields), returns the
@@ -648,11 +679,14 @@ impl ModuleCompiler {
                 body: self.rewrite_statement_block(body, resolver, scopes, ctx)?,
             },
             StatementKind::For {
-                variable,
+                variables,
                 iterable,
                 body,
             } => {
-                if ctx.is_some_and(|ctx| ctx.globals.contains(variable)) {
+                if let Some(variable) = variables
+                    .iter()
+                    .find(|variable| ctx.is_some_and(|ctx| ctx.globals.contains(*variable)))
+                {
                     return Err(XeError::new(
                         XeErrorKind::InvalidGlobal(format!(
                             "'{variable}' is declared global and cannot be used as a loop variable"
@@ -661,14 +695,22 @@ impl ModuleCompiler {
                     ));
                 }
                 let iterable = self.rewrite_expression(iterable, resolver, scopes, ctx)?;
-                scopes.push(HashSet::from([variable.clone()]));
+                scopes.push(variables.iter().cloned().collect());
                 let body = self.rewrite_statement_block(body, resolver, scopes, ctx);
                 scopes.pop();
                 StatementKind::For {
-                    variable: variable.clone(),
+                    variables: variables.clone(),
                     iterable,
                     body: body?,
                 }
+            }
+            StatementKind::Unpack { targets, value } => {
+                let value = self.rewrite_expression(value, resolver, scopes, ctx)?;
+                let targets = targets
+                    .iter()
+                    .map(|target| self.rewrite_target(target, resolver, scopes, ctx))
+                    .collect::<Result<_, XeError>>()?;
+                StatementKind::Unpack { targets, value }
             }
             StatementKind::Try {
                 body,
@@ -760,6 +802,36 @@ impl ModuleCompiler {
         })
     }
 
+    fn rewrite_target(
+        &self,
+        target: &Expression,
+        resolver: &Resolver,
+        scopes: &mut [HashSet<String>],
+        ctx: Option<&FunctionContext>,
+    ) -> Result<Expression, XeError> {
+        let kind = match &target.kind {
+            ExpressionKind::Identifier(name) => {
+                ExpressionKind::Identifier(self.resolve_target(name, resolver, scopes, ctx))
+            }
+            ExpressionKind::FieldAccess { object, field } => {
+                match self.split_module_access(object, resolver, scopes) {
+                    Some((module_id, rest)) if rest.is_empty() => ExpressionKind::Identifier(
+                        self.module_member_symbol(module_id, field, &target.span)?,
+                    ),
+                    _ => ExpressionKind::FieldAccess {
+                        object: Box::new(self.rewrite_expression(object, resolver, scopes, ctx)?),
+                        field: field.clone(),
+                    },
+                }
+            }
+            _ => return self.rewrite_expression(target, resolver, scopes, ctx),
+        };
+        Ok(Expression {
+            kind,
+            span: target.span.clone(),
+        })
+    }
+
     fn rewrite_expressions(
         &self,
         expressions: &[Expression],
@@ -816,6 +888,7 @@ impl ModuleCompiler {
                 object,
                 method,
                 args,
+                ..
             } => {
                 let args = self.rewrite_expressions(args, resolver, scopes, ctx)?;
                 match self.split_module_access(object, resolver, scopes) {
@@ -826,7 +899,8 @@ impl ModuleCompiler {
                     },
                     _ => ExpressionKind::MethodCall {
                         object: Box::new(rewrite(object)?),
-                        method: self.resolve_method(method, resolver),
+                        method: method.clone(),
+                        function: self.resolve_method(method, resolver),
                         args,
                     },
                 }
@@ -865,6 +939,52 @@ impl ModuleCompiler {
                 ExpressionKind::FieldAccess {
                     object: Box::new(rewrite(object)?),
                     field: field.clone(),
+                }
+            }
+            ExpressionKind::Conditional {
+                condition,
+                then_value,
+                else_value,
+            } => ExpressionKind::Conditional {
+                condition: Box::new(rewrite(condition)?),
+                then_value: Box::new(rewrite(then_value)?),
+                else_value: Box::new(rewrite(else_value)?),
+            },
+            ExpressionKind::KeywordArg { name, value } => ExpressionKind::KeywordArg {
+                name: name.clone(),
+                value: Box::new(rewrite(value)?),
+            },
+            ExpressionKind::Comprehension { kind, clauses } => {
+                let mut inner_scopes = scopes.to_vec();
+                let mut rewritten = Vec::with_capacity(clauses.len());
+                for clause in clauses {
+                    rewritten.push(match clause {
+                        ComprehensionClause::For { variables, iterable } => {
+                            let iterable = self.rewrite_expression(iterable, resolver, &inner_scopes, ctx)?;
+                            inner_scopes.push(variables.iter().cloned().collect());
+                            ComprehensionClause::For {
+                                variables: variables.clone(),
+                                iterable,
+                            }
+                        }
+                        ComprehensionClause::If(condition) => ComprehensionClause::If(
+                            self.rewrite_expression(condition, resolver, &inner_scopes, ctx)?,
+                        ),
+                    });
+                }
+                let inner = |expression: &Expression| {
+                    self.rewrite_expression(expression, resolver, &inner_scopes, ctx)
+                        .map(Box::new)
+                };
+                let kind = match kind {
+                    ComprehensionKind::List(element) => ComprehensionKind::List(inner(element)?),
+                    ComprehensionKind::Map(key, value) => {
+                        ComprehensionKind::Map(inner(key)?, inner(value)?)
+                    }
+                };
+                ExpressionKind::Comprehension {
+                    kind,
+                    clauses: rewritten,
                 }
             }
         };
@@ -971,6 +1091,12 @@ fn validate_nesting(statement: &Statement, is_top_level: bool) -> Result<(), XeE
         | StatementKind::Repeat { body, .. }
         | StatementKind::For { body, .. }
         | StatementKind::FunctionDef { body, .. } => vec![body],
+        StatementKind::StructDef { methods, .. } => {
+            for method in methods {
+                validate_nesting(method, true)?;
+            }
+            Vec::new()
+        }
         _ => Vec::new(),
     };
     for block in nested {
@@ -1014,8 +1140,18 @@ fn collect_exports(
     }
     let mut declared_globals = Vec::new();
     for statement in &program.statements {
-        if let StatementKind::FunctionDef { body, .. } = &statement.kind {
-            declared_globals.extend(collect_global_declarations(body));
+        match &statement.kind {
+            StatementKind::FunctionDef { body, .. } => {
+                declared_globals.extend(collect_global_declarations(body));
+            }
+            StatementKind::StructDef { methods, .. } => {
+                for method in methods {
+                    if let StatementKind::FunctionDef { body, .. } = &method.kind {
+                        declared_globals.extend(collect_global_declarations(body));
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1044,6 +1180,13 @@ fn collect_top_level_targets(statement: &Statement, targets: &mut Vec<(String, S
     match &statement.kind {
         StatementKind::Assignment { name, .. } => {
             targets.push((name.clone(), statement.span.clone()));
+        }
+        StatementKind::Unpack { targets: items, .. } => {
+            for item in items {
+                if let ExpressionKind::Identifier(name) = &item.kind {
+                    targets.push((name.clone(), statement.span.clone()));
+                }
+            }
         }
         StatementKind::Try {
             body,
@@ -1074,13 +1217,13 @@ fn collect_top_level_targets(statement: &Statement, targets: &mut Vec<(String, S
                 }
             }
         }
-        StatementKind::For { variable, body, .. } => {
+        StatementKind::For { variables, body, .. } => {
             // Assignments to the loop variable inside its loop do not create a global.
             let mut inner = Vec::new();
             for s in body {
                 collect_top_level_targets(s, &mut inner);
             }
-            targets.extend(inner.into_iter().filter(|(name, _)| name != variable));
+            targets.extend(inner.into_iter().filter(|(name, _)| !variables.contains(name)));
         }
         StatementKind::While { body, .. } | StatementKind::Repeat { body, .. } => {
             for s in body {
@@ -1105,8 +1248,15 @@ impl FunctionContext {
             StatementKind::Assignment { name, .. } => {
                 assigned.insert(name.clone());
             }
-            StatementKind::For { variable, .. } => {
-                assigned.insert(variable.clone());
+            StatementKind::Unpack { targets, .. } => {
+                for target in targets {
+                    if let ExpressionKind::Identifier(name) = &target.kind {
+                        assigned.insert(name.clone());
+                    }
+                }
+            }
+            StatementKind::For { variables, .. } => {
+                assigned.extend(variables.iter().cloned());
             }
             StatementKind::Try {
                 catch_variable: Some(name),

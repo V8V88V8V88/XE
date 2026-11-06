@@ -5,6 +5,7 @@
   "fileTypes": ["xe"],
   "patterns": [
     { "include": "#comment" },
+    { "include": "#fstring" },
     { "include": "#string" },
     { "include": "#number" },
     { "include": "#function-definition" },
@@ -24,6 +25,37 @@
       "captures": {
         "1": { "name": "punctuation.definition.comment.xe" }
       }
+    },
+    "fstring": {
+      "name": "string.quoted.double.interpolated.xe",
+      "begin": "([fF])(\")",
+      "end": "\"|$",
+      "beginCaptures": {
+        "1": { "name": "storage.type.string.xe" },
+        "2": { "name": "punctuation.definition.string.begin.xe" }
+      },
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.string.end.xe" }
+      },
+      "patterns": [
+        {
+          "name": "constant.character.escape.xe",
+          "match": "\\\\.|\\{\\{|\\}\\}"
+        },
+        {
+          "name": "meta.embedded.interpolation.xe",
+          "begin": "\\{",
+          "end": "\\}",
+          "beginCaptures": {
+            "0": { "name": "punctuation.section.interpolation.begin.xe" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.section.interpolation.end.xe" }
+          },
+          "contentName": "source.xe",
+          "patterns": [{ "include": "$self" }]
+        }
+      ]
     },
     "string": {
       "name": "string.quoted.double.xe",
@@ -97,7 +129,7 @@
       ]
     },
     "builtin-call": {
-      "match": "(?<![.\\w])(print|input|length|type|convert|append|pop|insert|remove|keys|values|has_key|contains|split|join|range|upper|lower|trim|replace|starts_with|ends_with|find|abs|round|floor|ceil|sqrt|min|max|sum|sort|reverse|copy|random|args|exit|read_file|write_file|append_file|file_exists|error)\\s*(?=\\()",
+      "match": "(?<![.\\w])(print|input|length|type|convert|append|pop|insert|remove|keys|values|has_key|contains|split|join|range|upper|lower|trim|replace|starts_with|ends_with|find|abs|round|floor|ceil|sqrt|min|max|sum|sort|reverse|copy|random|args|exit|read_file|write_file|append_file|file_exists|error|items|enumerate|zip)\\s*(?=\\()",
       "captures": {
         "1": { "name": "support.function.builtin.xe" }
       }

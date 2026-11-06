@@ -47,6 +47,9 @@ pub enum Builtin {
     AppendFile,
     FileExists,
     Error,
+    Items,
+    Enumerate,
+    Zip,
 }
 
 pub struct Signature {
@@ -128,6 +131,9 @@ impl Builtin {
         Builtin::AppendFile,
         Builtin::FileExists,
         Builtin::Error,
+        Builtin::Items,
+        Builtin::Enumerate,
+        Builtin::Zip,
     ];
 
     pub fn from_name(name: &str) -> Option<Builtin> {
@@ -182,6 +188,9 @@ impl Builtin {
             Builtin::AppendFile => "append_file",
             Builtin::FileExists => "file_exists",
             Builtin::Error => "error",
+            Builtin::Items => "items",
+            Builtin::Enumerate => "enumerate",
+            Builtin::Zip => "zip",
         }
     }
 
@@ -231,6 +240,9 @@ impl Builtin {
             Builtin::WriteFile | Builtin::AppendFile => sig(2, Some(2), vec![Text, Text], Void),
             Builtin::FileExists => sig(1, Some(1), vec![Text], Boolean),
             Builtin::Error => sig(1, Some(1), vec![Unknown], Void),
+            Builtin::Items => sig(1, Some(1), vec![Unknown], List),
+            Builtin::Enumerate => sig(1, Some(2), vec![Unknown, Number], List),
+            Builtin::Zip => sig(1, None, vec![Unknown], List),
         }
     }
 }

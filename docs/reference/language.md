@@ -47,6 +47,7 @@ assigned.
 
 | Precedence (low to high) | Operators |
 | --- | --- |
+| 0 | `a if condition else b` |
 | 1 | `or` |
 | 2 | `and` |
 | 3 | `not` |
@@ -64,6 +65,7 @@ As in Python, `not a == b` means `not (a == b)` and `-2 ** 2` is `-4`.
 - `==` compares values deeply; numbers within a tiny relative tolerance are equal, so `0.1 + 0.2 == 0.3`.
 - `in` checks list membership, substrings in text, and keys in maps and structs.
 - `and`, `or` and `not` accept any value and use its truthiness.
+- `a if condition else b` evaluates `condition` and then only one of `a` and `b`.
 
 ### Truthiness
 
@@ -79,6 +81,30 @@ items[0] = 5
 items[-1] += 1
 point.x = 3
 ```
+
+Several targets can be assigned at once. The right side is evaluated first, so this swaps:
+
+```xe
+a, b = 1, 2
+a, b = b, a
+grid[0], point.x = 5, 6
+```
+
+A comma-separated list of values (`1, 2`, or `(1, 2)` in parentheses) is a list.
+Unpacking works on any list, text or map whose length matches the number of
+targets; otherwise it is a runtime error (`too many values to unpack (expected 2, got 3)`).
+
+## Text and f-strings
+
+An `f` before a string makes an f-string. Expressions in `{}` are evaluated and
+converted to text; `{{` and `}}` are literal braces:
+
+```xe
+name = "Ada"
+print(f"Hello {name}, you have {length(name) * 2} points {{bonus}}")
+```
+
+Format specifications such as `{x:.2f}` are not supported yet; use `round(x, 2)`.
 
 ## Indexing and slicing
 
@@ -97,10 +123,24 @@ access outside it is a runtime error.
 - `if` / `elif` / `else`
 - `while condition:`
 - `for name in iterable:` over lists, text (characters), maps (keys) and structs (field names)
+- `for a, b in iterable:` unpacks each item, e.g. `for key, value in items(m):`
 - `for i in range(n):` (also `range(start, stop)` and `range(start, stop, step)`)
 - `repeat N times:`
 - `break`, `continue`, `pass`
 - `try:` / `catch name:` (see [Errors](#errors))
+
+## Comprehensions
+
+```xe
+squares = [x * x for x in range(5)]
+evens = [x for x in numbers if x % 2 == 0]
+pairs = [(i, j) for i in range(3) for j in range(i)]
+lookup = {name: length(name) for name in names}
+total = sum(x * x for x in range(10))
+```
+
+Comprehensions can have several `for` and `if` clauses. Their loop variables belong to
+the comprehension and do not change variables with the same name outside it.
 
 ## Functions
 
@@ -110,6 +150,7 @@ fun area(width, height):
 ```
 
 - A function without a `return` value returns `none`.
+- `return a, b` returns the list `[a, b]`, which can be unpacked with `x, y = f()`.
 - `fun`, `fn` and `function` are interchangeable.
 - Functions and structs can only be defined at the top level of a module.
 - Functions are values: they can be stored in variables, passed to other functions and
@@ -126,13 +167,34 @@ print(apply(upper, ["a", "b"]))        # ["A", "B"]
 print(apply(lambda x: x * 10, [1, 2])) # [10, 20]
 ```
 
+### Default and keyword arguments
+
+Parameters can have default values, and arguments can be passed by name:
+
+```xe
+fun greet(name, greeting = "Hello", punct = "!"):
+    return f"{greeting}, {name}{punct}"
+
+print(greet("Ada"))                 # Hello, Ada!
+print(greet("Ada", punct = "?"))    # Hello, Ada?
+print(greet(greeting = "Hi", name = "Bob"))
+```
+
+- Parameters with defaults come after the ones without.
+- A default is evaluated each time it is used, in the module's scope, so `fun f(items = [])`
+  gets a new list on every call.
+- Keyword arguments come after positional ones, and arguments are evaluated in the order
+  they are written.
+- Built-in functions and lambdas take positional arguments only.
+
 `lambda params: expression` creates an anonymous function. A lambda can use the
 variables around it; their values are copied when the lambda is created.
 
 ### Method-call syntax
 
-`value.name(args)` calls `name(value, args)` when `name` is a function, so these are
-equivalent:
+`value.name(args)` calls the struct method `name` when `value` is a struct that has one
+(see [Structs](#structs)). Otherwise it calls `name(value, args)` when `name` is a
+function, so these are equivalent:
 
 ```xe
 print(upper("hi"), "hi".upper())
@@ -165,6 +227,42 @@ p = Point(1, 2)
 p.x += 10
 print(p)       # Point { x: 11, y: 2 }
 ```
+
+Fields can have default values, and constructors accept keyword arguments:
+
+```xe
+struct Config:
+    name
+    retries = 3
+    verbose = false
+
+c = Config("api", verbose = true)
+```
+
+Functions defined inside a struct are methods. The first parameter receives the
+struct (call it `self`):
+
+```xe
+struct Point:
+    x
+    y
+
+    fun norm2(self):
+        return self.x * self.x + self.y * self.y
+
+    fun move(self, dx, dy = 0):
+        self.x += dx
+        self.y += dy
+        return self
+
+p = Point(3, 4)
+print(p.norm2())           # 25
+print(p.move(1).norm2())   # 32
+```
+
+When the compiler knows a value is a struct, calling its method is a direct native call.
+Otherwise the method is looked up when the program runs. Method names must differ from
+field names.
 
 ## Modules and imports
 
@@ -199,6 +297,9 @@ from geometry import area, unit as one
 | `sort(list)`, `reverse(list)` | Sort or reverse in place; return the list |
 | `copy(value)` | Shallow copy of a list, map or struct |
 | `keys(map)`, `values(map)`, `has_key(map, key)` | Map access |
+| `items(map)` | `[key, value]` pairs of a map or struct |
+| `enumerate(items)`, `enumerate(items, start)` | `[index, item]` pairs |
+| `zip(a, b, ...)` | Lists of items at the same position, up to the shortest input |
 | `contains(collection, item)` | Same as `item in collection` |
 | `split(text)`, `split(text, separator)`, `join(list, separator)` | Text splitting and joining |
 | `upper`, `lower`, `trim`, `replace(text, old, new)` | Text transforms |

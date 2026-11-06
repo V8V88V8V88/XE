@@ -166,8 +166,16 @@ struct SymbolInfo {
 
 struct FunctionInfo {
     params: Vec<XeType>,
+    param_names: Vec<String>,
+    defaults: Vec<TypedExpression>,
     return_type: XeType,
     is_struct: bool,
+}
+
+enum ArgSource<'a> {
+    Receiver,
+    Expression(&'a Expression),
+    Default,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -216,6 +224,8 @@ pub struct SemanticAnalyzer {
     scopes: Vec<Scope>,
     functions: HashMap<String, FunctionInfo>,
     structs: HashMap<String, Vec<String>>,
+    struct_methods: HashMap<String, HashMap<String, String>>,
+    method_names: HashMap<String, Vec<String>>,
     loop_depth: usize,
     function: Option<FunctionState>,
     lambdas: Vec<LambdaFrame>,
@@ -231,6 +241,8 @@ impl SemanticAnalyzer {
             scopes: Vec::new(),
             functions: HashMap::new(),
             structs: HashMap::new(),
+            struct_methods: HashMap::new(),
+            method_names: HashMap::new(),
             loop_depth: 0,
             function: None,
             lambdas: Vec::new(),
@@ -243,41 +255,62 @@ impl SemanticAnalyzer {
         // Pass 1: Collect function signatures, structs and module-level variables
         for stmt in &program.statements {
             match &stmt.kind {
-                StatementKind::FunctionDef { name, params, body } => {
+                StatementKind::FunctionDef { name, params, body, .. } => {
                     self.check_new_definition(name, &stmt.span)?;
-                    let param_types = self
-                        .seeds
-                        .params
-                        .get(name)
-                        .cloned()
-                        .unwrap_or_else(|| vec![XeType::Unknown; params.len()]);
-                    let return_type = self
-                        .seeds
-                        .returns
-                        .get(name)
-                        .cloned()
-                        .unwrap_or(XeType::Unknown);
-                    self.functions.insert(name.clone(), FunctionInfo {
-                        params: param_types,
-                        return_type,
-                        is_struct: false,
-                    });
-
-                    let mut declared_globals = Vec::new();
-                    collect_global_names(body, &mut declared_globals);
-                    for global in declared_globals {
-                        self.declare_global_placeholder(&global, &stmt.span);
-                    }
+                    self.register_function(name, params, body, None, &stmt.span);
                 }
-                StatementKind::StructDef { name, fields } => {
+                StatementKind::StructDef {
+                    name,
+                    fields,
+                    methods,
+                    ..
+                } => {
                     self.check_new_definition(name, &stmt.span)?;
-                    check_unique_names(fields, &stmt.span)?;
+                    let mut member_names = fields.clone();
                     self.structs.insert(name.clone(), fields.clone());
                     self.functions.insert(name.clone(), FunctionInfo {
                         params: vec![XeType::Unknown; fields.len()],
+                        param_names: fields.clone(),
+                        defaults: Vec::new(),
                         return_type: XeType::Struct(name.clone()),
                         is_struct: true,
                     });
+                    let mut table = HashMap::new();
+                    for method in methods {
+                        let StatementKind::FunctionDef {
+                            name: method_name,
+                            params,
+                            body,
+                            ..
+                        } = &method.kind
+                        else {
+                            unreachable!("struct methods are function definitions");
+                        };
+                        if params.is_empty() {
+                            return Err(XeError::new(
+                                XeErrorKind::InvalidOperation(format!(
+                                    "method '{method_name}' must take the struct as its first parameter, like '{method_name}(self)'"
+                                )),
+                                Some(method.span.clone()),
+                            ));
+                        }
+                        member_names.push(method_name.clone());
+                        let symbol = method_symbol(name, method_name);
+                        self.register_function(
+                            &symbol,
+                            params,
+                            body,
+                            Some(XeType::Struct(name.clone())),
+                            &method.span,
+                        );
+                        self.method_names
+                            .entry(method_name.clone())
+                            .or_default()
+                            .push(symbol.clone());
+                        table.insert(method_name.clone(), symbol);
+                    }
+                    check_unique_names(&member_names, &stmt.span)?;
+                    self.struct_methods.insert(name.clone(), table);
                 }
                 _ => {
                     let mut targets = Vec::new();
@@ -289,9 +322,75 @@ impl SemanticAnalyzer {
             }
         }
 
+        for stmt in &program.statements {
+            match &stmt.kind {
+                StatementKind::FunctionDef { name, defaults, .. } => {
+                    self.analyze_defaults(name, defaults)?;
+                }
+                StatementKind::StructDef {
+                    name,
+                    defaults,
+                    methods,
+                    ..
+                } => {
+                    self.analyze_defaults(name, defaults)?;
+                    for method in methods {
+                        if let StatementKind::FunctionDef {
+                            name: method_name,
+                            defaults,
+                            ..
+                        } = &method.kind
+                        {
+                            self.analyze_defaults(&method_symbol(name, method_name), defaults)?;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
         // Pass 2: Full semantic analysis and IR production
         let mut typed_statements = Vec::new();
         for stmt in &program.statements {
+            if let StatementKind::StructDef {
+                name,
+                fields,
+                methods,
+                ..
+            } = &stmt.kind
+            {
+                let mut method_table = Vec::new();
+                let mut method_defs = Vec::new();
+                for method in methods {
+                    let StatementKind::FunctionDef {
+                        name: method_name,
+                        params,
+                        body,
+                        ..
+                    } = &method.kind
+                    else {
+                        unreachable!("struct methods are function definitions");
+                    };
+                    let symbol = method_symbol(name, method_name);
+                    let kind = self.analyze_function(&symbol, params, body, &method.span)?;
+                    method_table.push((method_name.clone(), symbol));
+                    method_defs.push(TypedStatement {
+                        kind,
+                        span: method.span.clone(),
+                    });
+                }
+                typed_statements.push(TypedStatement {
+                    kind: TypedStatementKind::StructDef {
+                        name: name.clone(),
+                        fields: fields.clone(),
+                        defaults: self.functions[name].defaults.clone(),
+                        methods: method_table,
+                    },
+                    span: stmt.span.clone(),
+                });
+                typed_statements.extend(method_defs);
+                continue;
+            }
             typed_statements.push(self.analyze_statement(stmt)?);
         }
 
@@ -309,6 +408,60 @@ impl SemanticAnalyzer {
             statements: typed_statements,
             globals,
         })
+    }
+
+    fn register_function(
+        &mut self,
+        name: &str,
+        params: &[String],
+        body: &[Statement],
+        receiver: Option<XeType>,
+        span: &Span,
+    ) {
+        let mut param_types = self
+            .seeds
+            .params
+            .get(name)
+            .cloned()
+            .unwrap_or_else(|| vec![XeType::Unknown; params.len()]);
+        if let Some(receiver) = receiver {
+            param_types[0] = receiver;
+        }
+        let return_type = self
+            .seeds
+            .returns
+            .get(name)
+            .cloned()
+            .unwrap_or(XeType::Unknown);
+        self.functions.insert(name.to_string(), FunctionInfo {
+            params: param_types,
+            param_names: params.to_vec(),
+            defaults: Vec::new(),
+            return_type,
+            is_struct: false,
+        });
+
+        let mut declared_globals = Vec::new();
+        collect_global_names(body, &mut declared_globals);
+        for global in declared_globals {
+            self.declare_global_placeholder(&global, span);
+        }
+    }
+
+    fn analyze_defaults(&mut self, name: &str, defaults: &[Expression]) -> XeResult<()> {
+        let mut typed = Vec::with_capacity(defaults.len());
+        for default in defaults {
+            let value = self.analyze_expression(default)?;
+            typed.push(if value.ty.is_scalar() {
+                value
+            } else {
+                self.coerce_to_dynamic(value)
+            });
+        }
+        if let Some(info) = self.functions.get_mut(name) {
+            info.defaults = typed;
+        }
+        Ok(())
     }
 
     fn check_new_definition(&self, name: &str, span: &Span) -> XeResult<()> {
@@ -375,7 +528,7 @@ impl SemanticAnalyzer {
             }
             StatementKind::While { condition, body } => {
                 let condition = self.analyze_condition(condition)?;
-                let body = self.analyze_loop_body(body, None)?;
+                let body = self.analyze_loop_body(body, &[], &stmt.span)?;
                 TypedStatementKind::While { condition, body }
             }
             StatementKind::Repeat { count, body } => {
@@ -383,56 +536,71 @@ impl SemanticAnalyzer {
                 let count = self
                     .coerce(count, &XeType::Number)
                     .map_err(|got| type_mismatch("number", got, &stmt.span))?;
-                let body = self.analyze_loop_body(body, None)?;
+                let body = self.analyze_loop_body(body, &[], &stmt.span)?;
                 TypedStatementKind::Repeat { count, body }
             }
             StatementKind::For {
-                variable,
+                variables,
                 iterable,
                 body,
             } => {
-                let typed_iter = self.analyze_expression(iterable)?;
-                let is_range = matches!(
-                    typed_iter.kind,
-                    TypedExpressionKind::BuiltinCall {
-                        builtin: Builtin::Range,
-                        ..
-                    }
-                );
-                let variable_type = match &typed_iter.ty {
-                    _ if is_range => XeType::Number,
-                    XeType::Text | XeType::Struct(_) => XeType::Text,
-                    XeType::List | XeType::Map | XeType::Unknown => XeType::Unknown,
-                    other => {
-                        return Err(XeError::new(
-                            XeErrorKind::TypeMismatch {
-                                expected: "list, text, or map".to_string(),
-                                got: other.name(),
-                            },
-                            Some(iterable.span.clone()),
-                        ));
-                    }
-                };
-                self.record_var_type(variable, &variable_type);
-                let body = self.analyze_loop_body(
-                    body,
-                    Some((variable.clone(), variable_type.clone(), stmt.span.clone())),
-                )?;
+                let (typed_iter, variables) = self.loop_variables(variables, iterable, &stmt.span)?;
+                for (name, ty) in &variables {
+                    self.record_var_type(name, ty);
+                }
+                let body = self.analyze_loop_body(body, &variables, &stmt.span)?;
 
                 TypedStatementKind::For {
-                    variable: variable.clone(),
-                    variable_type,
+                    variables,
                     iterable: typed_iter,
                     body,
                 }
             }
-            StatementKind::FunctionDef { name, params, body } => {
+            StatementKind::FunctionDef { name, params, body, .. } => {
                 self.analyze_function(name, params, body, &stmt.span)?
             }
-            StatementKind::StructDef { name, fields } => TypedStatementKind::StructDef {
-                name: name.clone(),
-                fields: fields.clone(),
-            },
+            StatementKind::StructDef { .. } => {
+                return Err(XeError::new(XeErrorKind::NestedDefinition, Some(stmt.span.clone())));
+            }
+            StatementKind::Unpack { targets, value } => {
+                let typed_value = self.analyze_expression(value)?;
+                let typed_value = self.coerce_to_dynamic(typed_value);
+                let mut assignments = Vec::with_capacity(targets.len());
+                for (i, target) in targets.iter().enumerate() {
+                    let item = TypedExpression {
+                        kind: TypedExpressionKind::UnpackItem(i),
+                        ty: XeType::Unknown,
+                        span: target.span.clone(),
+                    };
+                    let kind = match &target.kind {
+                        ExpressionKind::Identifier(name) => TypedStatementKind::Assignment {
+                            name: name.clone(),
+                            value: self.assign_variable(name, item, &stmt.span)?,
+                        },
+                        ExpressionKind::Index { object, index } => {
+                            self.index_assignment(object, index, item, None, &stmt.span)?
+                        }
+                        ExpressionKind::FieldAccess { object, field } => {
+                            self.field_assignment(object, field, item, None, &stmt.span)?
+                        }
+                        _ => {
+                            return Err(XeError::new(
+                                XeErrorKind::ExpectedToken("valid assignment target".to_string()),
+                                Some(target.span.clone()),
+                            ));
+                        }
+                    };
+                    assignments.push(TypedStatement {
+                        kind,
+                        span: stmt.span.clone(),
+                    });
+                }
+                TypedStatementKind::Unpack {
+                    value: typed_value,
+                    count: targets.len(),
+                    assignments,
+                }
+            }
             StatementKind::Return { value } => {
                 if self.function.is_none() {
                     return Err(XeError::new(
@@ -486,30 +654,7 @@ impl SemanticAnalyzer {
                 op,
             } => {
                 let typed_value = self.analyze_expression(value)?;
-                let typed_object = self.analyze_expression(object)?;
-                let typed_index = self.analyze_expression(index)?;
-                match &typed_object.ty {
-                    XeType::List => {
-                        if !typed_index.ty.is_compatible(&XeType::Number) {
-                            return Err(type_mismatch("number", typed_index.ty, &index.span));
-                        }
-                    }
-                    XeType::Map | XeType::Struct(_) | XeType::Unknown => {}
-                    ty => {
-                        return Err(XeError::new(
-                            XeErrorKind::InvalidAssignmentTarget(format!(
-                                "cannot assign to an element of a {ty} value"
-                            )),
-                            Some(stmt.span.clone()),
-                        ));
-                    }
-                }
-                TypedStatementKind::IndexAssignment {
-                    object: typed_object,
-                    index: self.coerce_to_dynamic(typed_index),
-                    value: self.coerce_to_dynamic(typed_value),
-                    op: *op,
-                }
+                self.index_assignment(object, index, typed_value, *op, &stmt.span)?
             }
             StatementKind::FieldAssignment {
                 object,
@@ -518,14 +663,7 @@ impl SemanticAnalyzer {
                 op,
             } => {
                 let typed_value = self.analyze_expression(value)?;
-                let typed_object = self.analyze_expression(object)?;
-                self.check_field_access(&typed_object, field, &stmt.span, true)?;
-                TypedStatementKind::FieldAssignment {
-                    object: typed_object,
-                    field: field.clone(),
-                    value: self.coerce_to_dynamic(typed_value),
-                    op: *op,
-                }
+                self.field_assignment(object, field, typed_value, *op, &stmt.span)?
             }
             StatementKind::Try {
                 body,
@@ -562,30 +700,140 @@ impl SemanticAnalyzer {
         })
     }
 
+    fn index_assignment(
+        &mut self,
+        object: &Expression,
+        index: &Expression,
+        typed_value: TypedExpression,
+        op: Option<BinaryOperator>,
+        span: &Span,
+    ) -> XeResult<TypedStatementKind> {
+        let typed_object = self.analyze_expression(object)?;
+        let typed_index = self.analyze_expression(index)?;
+        match &typed_object.ty {
+            XeType::List => {
+                if !typed_index.ty.is_compatible(&XeType::Number) {
+                    return Err(type_mismatch("number", typed_index.ty, &index.span));
+                }
+            }
+            XeType::Map | XeType::Struct(_) | XeType::Unknown => {}
+            ty => {
+                return Err(XeError::new(
+                    XeErrorKind::InvalidAssignmentTarget(format!(
+                        "cannot assign to an element of a {ty} value"
+                    )),
+                    Some(span.clone()),
+                ));
+            }
+        }
+        Ok(TypedStatementKind::IndexAssignment {
+            object: typed_object,
+            index: self.coerce_to_dynamic(typed_index),
+            value: self.coerce_to_dynamic(typed_value),
+            op,
+        })
+    }
+
+    fn field_assignment(
+        &mut self,
+        object: &Expression,
+        field: &str,
+        typed_value: TypedExpression,
+        op: Option<BinaryOperator>,
+        span: &Span,
+    ) -> XeResult<TypedStatementKind> {
+        let typed_object = self.analyze_expression(object)?;
+        self.check_field_access(&typed_object, field, span, true)?;
+        Ok(TypedStatementKind::FieldAssignment {
+            object: typed_object,
+            field: field.to_string(),
+            value: self.coerce_to_dynamic(typed_value),
+            op,
+        })
+    }
+
+    fn loop_variables(
+        &mut self,
+        variables: &[String],
+        iterable: &Expression,
+        span: &Span,
+    ) -> XeResult<(TypedExpression, Vec<(String, XeType)>)> {
+        check_unique_names(variables, span)?;
+        let typed_iter = self.analyze_expression(iterable)?;
+        let is_range = matches!(
+            typed_iter.kind,
+            TypedExpressionKind::BuiltinCall {
+                builtin: Builtin::Range,
+                ..
+            }
+        );
+        let item_type = match &typed_iter.ty {
+            _ if is_range => XeType::Number,
+            XeType::Text | XeType::Struct(_) => XeType::Text,
+            XeType::List | XeType::Map | XeType::Unknown => XeType::Unknown,
+            other => {
+                return Err(XeError::new(
+                    XeErrorKind::TypeMismatch {
+                        expected: "list, text, or map".to_string(),
+                        got: other.name(),
+                    },
+                    Some(iterable.span.clone()),
+                ));
+            }
+        };
+        if variables.len() > 1 && item_type != XeType::Unknown {
+            return Err(XeError::new(
+                XeErrorKind::InvalidOperation(format!(
+                    "cannot unpack the items of a {} into {} variables",
+                    if is_range { "range".to_string() } else { typed_iter.ty.name() },
+                    variables.len()
+                )),
+                Some(iterable.span.clone()),
+            ));
+        }
+        let typed_variables = if variables.len() == 1 {
+            vec![(variables[0].clone(), item_type)]
+        } else {
+            variables
+                .iter()
+                .map(|name| (name.clone(), XeType::Unknown))
+                .collect()
+        };
+        Ok((typed_iter, typed_variables))
+    }
+
+    fn variable_scope(variables: &[(String, XeType)], span: &Span) -> Scope {
+        Scope {
+            kind: ScopeKind::Loop,
+            vars: variables
+                .iter()
+                .map(|(name, ty)| {
+                    (name.clone(), SymbolInfo {
+                        ty: ty.clone(),
+                        defined_at: span.clone(),
+                        declared: true,
+                    })
+                })
+                .collect(),
+        }
+    }
+
     /// Analyzes a loop body. Assignments inside it are not definite after the loop,
     /// since the body may run zero times.
     fn analyze_loop_body(
         &mut self,
         body: &[Statement],
-        variable: Option<(String, XeType, Span)>,
+        variables: &[(String, XeType)],
+        span: &Span,
     ) -> XeResult<Vec<TypedStatement>> {
         let before = self.flow();
         self.loop_depth += 1;
-        let has_variable = variable.is_some();
-        if let Some((name, ty, span)) = variable {
-            let mut vars = HashMap::new();
-            vars.insert(name, SymbolInfo {
-                ty,
-                defined_at: span,
-                declared: true,
-            });
-            self.scopes.push(Scope {
-                kind: ScopeKind::Loop,
-                vars,
-            });
+        let has_variables = !variables.is_empty();
+        if has_variables {
+            self.scopes.push(Self::variable_scope(variables, span));
         }
         let typed = self.analyze_statements(body);
-        if has_variable {
+        if has_variables {
             self.scopes.pop();
         }
         self.loop_depth -= 1;
@@ -655,6 +903,7 @@ impl SemanticAnalyzer {
         Ok(TypedStatementKind::FunctionDef {
             name: name.to_string(),
             params: params.iter().cloned().zip(param_types).collect(),
+            defaults: self.functions[name].defaults.clone(),
             locals: state.locals,
             body: typed_body,
             return_type,
@@ -938,19 +1187,36 @@ impl SemanticAnalyzer {
             ExpressionKind::MethodCall {
                 object,
                 method,
+                function,
                 args,
             } => {
-                if self.functions.contains_key(method) || Builtin::is_builtin(method) {
+                let receiver = self.analyze_expression(object)?;
+                let function_name = function.clone().unwrap_or_else(|| method.clone());
+                let struct_method = match &receiver.ty {
+                    XeType::Struct(name) => self
+                        .struct_methods
+                        .get(name)
+                        .and_then(|methods| methods.get(method))
+                        .cloned(),
+                    _ => None,
+                };
+                if let Some(symbol) = struct_method {
+                    self.named_call(&symbol, Some(receiver), args, &span)?
+                } else if receiver.ty == XeType::Unknown && self.method_names.contains_key(method) {
+                    self.dynamic_method_call(receiver, method, &function_name, args)?
+                } else if self.functions.contains_key(&function_name) || Builtin::is_builtin(&function_name) {
                     // `object.method(args)` is `method(object, args)`.
-                    self.named_call(method, Some(object), args, &span)?
+                    self.named_call(&function_name, Some(receiver), args, &span)?
                 } else {
-                    let callee = self.analyze_expression(&Expression {
-                        kind: ExpressionKind::FieldAccess {
-                            object: object.clone(),
+                    self.check_field_access(&receiver, method, &span, false)?;
+                    let callee = TypedExpression {
+                        kind: TypedExpressionKind::FieldAccess {
+                            object: Box::new(receiver),
                             field: method.clone(),
                         },
+                        ty: XeType::Unknown,
                         span: span.clone(),
-                    })?;
+                    };
                     self.dynamic_call(callee, args, &format!("'{method}'"))?
                 }
             }
@@ -1045,6 +1311,50 @@ impl SemanticAnalyzer {
                     XeType::Unknown,
                 )
             }
+
+            ExpressionKind::Conditional {
+                condition,
+                then_value,
+                else_value,
+            } => {
+                let condition = self.analyze_condition(condition)?;
+                let then_value = self.analyze_expression(then_value)?;
+                let else_value = self.analyze_expression(else_value)?;
+                let (then_value, else_value, ty) = if then_value.ty == else_value.ty {
+                    let ty = then_value.ty.clone();
+                    (then_value, else_value, ty)
+                } else {
+                    (
+                        self.coerce_to_dynamic(then_value),
+                        self.coerce_to_dynamic(else_value),
+                        XeType::Unknown,
+                    )
+                };
+                (
+                    TypedExpressionKind::Conditional {
+                        condition: Box::new(condition),
+                        then_value: Box::new(then_value),
+                        else_value: Box::new(else_value),
+                    },
+                    ty,
+                )
+            }
+
+            ExpressionKind::Comprehension { kind, clauses } => {
+                let base = self.scopes.len();
+                let result = self.comprehension(kind, clauses, &span);
+                self.scopes.truncate(base);
+                result?
+            }
+
+            ExpressionKind::KeywordArg { name, .. } => {
+                return Err(XeError::new(
+                    XeErrorKind::Syntax(format!(
+                        "keyword argument '{name}' can only be used in a function call"
+                    )),
+                    Some(span),
+                ));
+            }
         };
 
         let typed = TypedExpression { kind, ty, span };
@@ -1053,6 +1363,54 @@ impl SemanticAnalyzer {
             return Ok(self.wrap_to_unknown(typed));
         }
         Ok(typed)
+    }
+
+    fn comprehension(
+        &mut self,
+        kind: &ComprehensionKind,
+        clauses: &[ComprehensionClause],
+        span: &Span,
+    ) -> XeResult<(TypedExpressionKind, XeType)> {
+        let mut typed_clauses = Vec::with_capacity(clauses.len());
+        for clause in clauses {
+            typed_clauses.push(match clause {
+                ComprehensionClause::For { variables, iterable } => {
+                    let (iterable, variables) = self.loop_variables(variables, iterable, span)?;
+                    self.scopes.push(Self::variable_scope(&variables, span));
+                    TypedComprehensionClause::For { variables, iterable }
+                }
+                ComprehensionClause::If(condition) => {
+                    TypedComprehensionClause::If(self.analyze_condition(condition)?)
+                }
+            });
+        }
+        let (kind, ty) = match kind {
+            ComprehensionKind::List(element) => {
+                let element = self.analyze_expression(element)?;
+                (
+                    TypedComprehensionKind::List(Box::new(self.coerce_to_dynamic(element))),
+                    XeType::List,
+                )
+            }
+            ComprehensionKind::Map(key, value) => {
+                let key = self.analyze_expression(key)?;
+                let value = self.analyze_expression(value)?;
+                (
+                    TypedComprehensionKind::Map(
+                        Box::new(self.coerce_to_dynamic(key)),
+                        Box::new(self.coerce_to_dynamic(value)),
+                    ),
+                    XeType::Map,
+                )
+            }
+        };
+        Ok((
+            TypedExpressionKind::Comprehension {
+                kind,
+                clauses: typed_clauses,
+            },
+            ty,
+        ))
     }
 
     fn slice_bound(&mut self, bound: &Option<Box<Expression>>) -> XeResult<Option<Box<TypedExpression>>> {
@@ -1187,35 +1545,115 @@ impl SemanticAnalyzer {
     fn named_call(
         &mut self,
         name: &str,
-        receiver: Option<&Expression>,
+        receiver: Option<TypedExpression>,
         args: &[Expression],
         span: &Span,
     ) -> XeResult<(TypedExpressionKind, XeType)> {
-        let all_args: Vec<&Expression> = receiver.into_iter().chain(args).collect();
+        let (positional, keywords) = split_arguments(args);
 
         if let Some(info) = self.functions.get(name) {
             let param_types = info.params.clone();
+            let param_names = info.param_names.clone();
+            let defaults = info.defaults.clone();
             let return_type = info.return_type.clone();
             let is_struct = info.is_struct;
-            if all_args.len() != param_types.len() {
-                return Err(XeError::new(
-                    XeErrorKind::WrongArgumentCount {
-                        name: name.to_string(),
-                        expected: param_types.len(),
-                        got: all_args.len(),
-                    },
-                    Some(span.clone()),
-                ));
+            let required = param_types.len() - defaults.len();
+
+            let mut sources: Vec<Option<ArgSource>> = (0..param_types.len()).map(|_| None).collect();
+            let mut order = Vec::new();
+            let mut given = 0;
+            if receiver.is_some() {
+                given += 1;
             }
-            let mut site_types = Vec::new();
-            let mut typed_args = Vec::new();
-            for (arg, param_ty) in all_args.iter().zip(&param_types) {
-                let typed = self.analyze_expression(arg)?;
-                site_types.push(typed.ty.clone());
+            given += positional.len();
+            if given > param_types.len() || (keywords.is_empty() && given < required) {
+                return Err(wrong_argument_count(name, required, param_types.len(), given, span));
+            }
+            let mut position = 0;
+            if receiver.is_some() {
+                sources[0] = Some(ArgSource::Receiver);
+                order.push(0);
+                position = 1;
+            }
+            for arg in &positional {
+                sources[position] = Some(ArgSource::Expression(arg));
+                order.push(position);
+                position += 1;
+            }
+            for (keyword, value, keyword_span) in &keywords {
+                let Some(index) = param_names.iter().position(|p| p == *keyword) else {
+                    return Err(XeError::new(
+                        XeErrorKind::InvalidOperation(format!(
+                            "{} '{name}' has no {} named '{keyword}'",
+                            if is_struct { "struct" } else { "function" },
+                            if is_struct { "field" } else { "parameter" },
+                        )),
+                        Some((*keyword_span).clone()),
+                    ));
+                };
+                if sources[index].is_some() {
+                    return Err(XeError::new(
+                        XeErrorKind::InvalidOperation(format!(
+                            "argument '{keyword}' of '{name}' is given more than once"
+                        )),
+                        Some((*keyword_span).clone()),
+                    ));
+                }
+                sources[index] = Some(ArgSource::Expression(value));
+                order.push(index);
+            }
+            for (index, source) in sources.iter_mut().enumerate() {
+                if source.is_none() {
+                    if index < required {
+                        return Err(XeError::new(
+                            XeErrorKind::InvalidOperation(format!(
+                                "missing argument '{}' in call to '{name}'",
+                                param_names[index]
+                            )),
+                            Some(span.clone()),
+                        ));
+                    }
+                    *source = Some(ArgSource::Default);
+                }
+            }
+
+            let mut receiver = receiver;
+            let mut site_types = vec![XeType::Unknown; param_types.len()];
+            let mut typed_args: Vec<Option<TypedExpression>> = (0..param_types.len()).map(|_| None).collect();
+            let evaluation: Vec<usize> = order
+                .iter()
+                .copied()
+                .chain((0..param_types.len()).filter(|i| !order.contains(i)))
+                .collect();
+            for index in evaluation {
+                let (typed, arg_span) = match sources[index].as_ref().expect("bound above") {
+                    ArgSource::Receiver => {
+                        let typed = receiver.take().expect("receiver is bound once");
+                        let arg_span = typed.span.clone();
+                        (typed, arg_span)
+                    }
+                    ArgSource::Expression(arg) => (self.analyze_expression(arg)?, arg.span.clone()),
+                    ArgSource::Default => {
+                        let default = &defaults[index - required];
+                        (
+                            TypedExpression {
+                                kind: TypedExpressionKind::DefaultArg {
+                                    function: name.to_string(),
+                                    index,
+                                },
+                                ty: default.ty.clone(),
+                                span: span.clone(),
+                            },
+                            span.clone(),
+                        )
+                    }
+                };
+                site_types[index] = typed.ty.clone();
+                let param_ty = &param_types[index];
                 let typed = self
                     .coerce(typed, param_ty)
-                    .map_err(|got| type_mismatch(&param_ty.name(), got, &arg.span))?;
-                typed_args.push(typed);
+                    .map_err(|got| type_mismatch(&param_ty.name(), got, &arg_span))?;
+                typed_args[index] = Some(typed);
             }
             if !is_struct {
                 self.report
@@ -1224,10 +1662,12 @@ impl SemanticAnalyzer {
                     .or_default()
                     .push(site_types);
             }
+            let natural = order.windows(2).all(|pair| pair[0] < pair[1]);
             return Ok((
                 TypedExpressionKind::FunctionCall {
                     name: name.to_string(),
-                    args: typed_args,
+                    args: typed_args.into_iter().map(|arg| arg.expect("every argument is bound")).collect(),
+                    order: if natural { Vec::new() } else { order },
                 },
                 return_type,
             ));
@@ -1239,14 +1679,24 @@ impl SemanticAnalyzer {
                 Some(span.clone()),
             ));
         };
+        if let Some((keyword, _, keyword_span)) = keywords.first() {
+            return Err(XeError::new(
+                XeErrorKind::InvalidOperation(format!(
+                    "built-in function '{name}' does not accept keyword arguments (got '{keyword}')"
+                )),
+                Some((*keyword_span).clone()),
+            ));
+        }
+        let receiver_count = usize::from(receiver.is_some());
+        let count = receiver_count + positional.len();
         let signature = builtin.signature();
-        if !signature.accepts(all_args.len()) {
+        if !signature.accepts(count) {
             return Err(XeError::new(
                 XeErrorKind::InvalidOperation(format!(
                     "function '{}' expects {} arguments, got {}",
                     name,
                     signature.describe_arity(),
-                    all_args.len()
+                    count
                 )),
                 Some(span.clone()),
             ));
@@ -1254,12 +1704,20 @@ impl SemanticAnalyzer {
 
         let mut original_types = Vec::new();
         let mut typed_args = Vec::new();
-        for (i, arg) in all_args.iter().enumerate() {
-            let typed = self.analyze_expression(arg)?;
+        let mut receiver = receiver;
+        for i in 0..count {
+            let (typed, arg_span) = if i < receiver_count {
+                let typed = receiver.take().expect("receiver is used once");
+                let arg_span = typed.span.clone();
+                (typed, arg_span)
+            } else {
+                let arg = positional[i - receiver_count];
+                (self.analyze_expression(arg)?, arg.span.clone())
+            };
             original_types.push(typed.ty.clone());
             let expected = signature.param_type(i);
             if !typed.ty.is_compatible(&expected) {
-                return Err(type_mismatch(&expected.name(), typed.ty, &arg.span));
+                return Err(type_mismatch(&expected.name(), typed.ty, &arg_span));
             }
             let typed = if expected.is_dynamic() {
                 self.coerce_to_dynamic(typed)
@@ -1270,22 +1728,25 @@ impl SemanticAnalyzer {
         }
 
         let return_type = match builtin {
-            Builtin::Convert => match &all_args[1].kind {
-                ExpressionKind::String(target) => match target.as_str() {
-                    "number" => XeType::Number,
-                    "text" => XeType::Text,
-                    "boolean" => XeType::Boolean,
-                    other => {
-                        return Err(XeError::new(
-                            XeErrorKind::InvalidOperation(format!(
-                                "convert() target must be \"number\", \"text\" or \"boolean\", got \"{other}\""
-                            )),
-                            Some(all_args[1].span.clone()),
-                        ));
-                    }
-                },
-                _ => XeType::Unknown,
-            },
+            Builtin::Convert => {
+                let target = positional[1 - receiver_count];
+                match &target.kind {
+                    ExpressionKind::String(target_name) => match target_name.as_str() {
+                        "number" => XeType::Number,
+                        "text" => XeType::Text,
+                        "boolean" => XeType::Boolean,
+                        other => {
+                            return Err(XeError::new(
+                                XeErrorKind::InvalidOperation(format!(
+                                    "convert() target must be \"number\", \"text\" or \"boolean\", got \"{other}\""
+                                )),
+                                Some(target.span.clone()),
+                            ));
+                        }
+                    },
+                    _ => XeType::Unknown,
+                }
+            }
             Builtin::Min | Builtin::Max
                 if original_types.len() >= 2 && original_types.iter().all(|t| *t == XeType::Number) =>
             {
@@ -1303,6 +1764,60 @@ impl SemanticAnalyzer {
         ))
     }
 
+    fn dynamic_arguments(
+        &mut self,
+        args: &[Expression],
+    ) -> XeResult<DynamicArguments> {
+        let (positional, keywords) = split_arguments(args);
+        let mut typed_positional = Vec::with_capacity(positional.len());
+        for arg in positional {
+            let typed = self.analyze_expression(arg)?;
+            typed_positional.push(self.coerce_to_dynamic(typed));
+        }
+        let mut typed_keywords = Vec::with_capacity(keywords.len());
+        for (name, value, _) in keywords {
+            let typed = self.analyze_expression(value)?;
+            typed_keywords.push((name.clone(), self.coerce_to_dynamic(typed)));
+        }
+        Ok((typed_positional, typed_keywords))
+    }
+
+    fn dynamic_method_call(
+        &mut self,
+        receiver: TypedExpression,
+        method: &str,
+        function_name: &str,
+        args: &[Expression],
+    ) -> XeResult<(TypedExpressionKind, XeType)> {
+        for symbol in self.method_names.get(method).cloned().unwrap_or_default() {
+            self.report.function_values.insert(symbol);
+        }
+        let fallback = if self.functions.contains_key(function_name) {
+            self.report.function_values.insert(function_name.to_string());
+            Some(TypedExpressionKind::FunctionRef(function_name.to_string()))
+        } else {
+            Builtin::from_name(function_name).map(TypedExpressionKind::BuiltinRef)
+        };
+        let fallback = fallback.map(|kind| {
+            Box::new(TypedExpression {
+                kind,
+                ty: XeType::Function,
+                span: receiver.span.clone(),
+            })
+        });
+        let (args, keywords) = self.dynamic_arguments(args)?;
+        Ok((
+            TypedExpressionKind::MethodCall {
+                object: Box::new(receiver),
+                method: method.to_string(),
+                args,
+                keywords,
+                fallback,
+            },
+            XeType::Unknown,
+        ))
+    }
+
     fn dynamic_call(
         &mut self,
         callee: TypedExpression,
@@ -1315,17 +1830,12 @@ impl SemanticAnalyzer {
                 Some(callee.span.clone()),
             ));
         }
-        let args = args
-            .iter()
-            .map(|arg| {
-                let typed = self.analyze_expression(arg)?;
-                Ok(self.coerce_to_dynamic(typed))
-            })
-            .collect::<XeResult<Vec<_>>>()?;
+        let (args, keywords) = self.dynamic_arguments(args)?;
         Ok((
             TypedExpressionKind::DynamicCall {
                 callee: Box::new(self.coerce_to_dynamic(callee)),
                 args,
+                keywords,
             },
             XeType::Unknown,
         ))
@@ -1374,6 +1884,40 @@ fn meet(a: Option<HashSet<String>>, b: Option<HashSet<String>>) -> Option<HashSe
         (None, other) | (other, None) => other,
         (Some(a), Some(b)) => Some(a.intersection(&b).cloned().collect()),
     }
+}
+
+type KeywordArgument<'a> = (&'a String, &'a Expression, &'a Span);
+type DynamicArguments = (Vec<TypedExpression>, Vec<(String, TypedExpression)>);
+
+fn split_arguments(args: &[Expression]) -> (Vec<&Expression>, Vec<KeywordArgument<'_>>) {
+    let mut positional = Vec::new();
+    let mut keywords = Vec::new();
+    for arg in args {
+        match &arg.kind {
+            ExpressionKind::KeywordArg { name, value } => keywords.push((name, &**value, &arg.span)),
+            _ => positional.push(arg),
+        }
+    }
+    (positional, keywords)
+}
+
+fn wrong_argument_count(name: &str, required: usize, total: usize, got: usize, span: &Span) -> XeError {
+    if required == total {
+        return XeError::new(
+            XeErrorKind::WrongArgumentCount {
+                name: name.to_string(),
+                expected: total,
+                got,
+            },
+            Some(span.clone()),
+        );
+    }
+    XeError::new(
+        XeErrorKind::InvalidOperation(format!(
+            "function '{name}' expects {required} to {total} arguments, got {got}"
+        )),
+        Some(span.clone()),
+    )
 }
 
 fn type_mismatch(expected: &str, got: XeType, span: &Span) -> XeError {
@@ -1428,6 +1972,13 @@ fn check_unique_names(names: &[String], span: &Span) -> XeResult<()> {
 fn collect_top_level_targets(statement: &Statement, targets: &mut Vec<String>) {
     match &statement.kind {
         StatementKind::Assignment { name, .. } => targets.push(name.clone()),
+        StatementKind::Unpack { targets: items, .. } => {
+            for item in items {
+                if let ExpressionKind::Identifier(name) = &item.kind {
+                    targets.push(name.clone());
+                }
+            }
+        }
         StatementKind::Try {
             body,
             catch_variable,
@@ -1455,12 +2006,12 @@ fn collect_top_level_targets(statement: &Statement, targets: &mut Vec<String>) {
                 }
             }
         }
-        StatementKind::For { variable, body, .. } => {
+        StatementKind::For { variables, body, .. } => {
             let mut inner = Vec::new();
             for s in body {
                 collect_top_level_targets(s, &mut inner);
             }
-            targets.extend(inner.into_iter().filter(|name| name != variable));
+            targets.extend(inner.into_iter().filter(|name| !variables.contains(name)));
         }
         StatementKind::While { body, .. } | StatementKind::Repeat { body, .. } => {
             for s in body {

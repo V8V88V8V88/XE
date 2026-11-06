@@ -30,6 +30,7 @@ pub struct CodeGenerator {
     loop_try_depths: Vec<usize>,
     builtin_values: Vec<Builtin>,
     temp_counter: usize,
+    unpack_stack: Vec<String>,
 }
 
 impl CodeGenerator {
@@ -50,6 +51,7 @@ impl CodeGenerator {
             loop_try_depths: Vec::new(),
             builtin_values: Vec::new(),
             temp_counter: 0,
+            unpack_stack: Vec::new(),
         }
     }
 
@@ -72,7 +74,7 @@ impl CodeGenerator {
                         .insert(name.clone(), params.iter().map(|(_, ty)| ty.clone()).collect());
                     self.function_returns.insert(name.clone(), return_type.clone());
                 }
-                TypedStatementKind::StructDef { name, fields } => {
+                TypedStatementKind::StructDef { name, fields, .. } => {
                     self.function_params
                         .insert(name.clone(), vec![XeType::Unknown; fields.len()]);
                     self.function_returns
@@ -100,11 +102,17 @@ impl CodeGenerator {
                 TypedStatementKind::FunctionDef {
                     name,
                     params,
+                    defaults,
                     locals,
                     body,
                     return_type,
-                } => self.generate_function(name, params, locals, body, return_type),
-                TypedStatementKind::StructDef { name, fields } => self.generate_struct(name, fields),
+                } => self.generate_function(name, params, defaults, locals, body, return_type),
+                TypedStatementKind::StructDef {
+                    name,
+                    fields,
+                    defaults,
+                    methods,
+                } => self.generate_struct(name, fields, defaults, methods),
                 _ => main_statements.push(stmt),
             }
         }
@@ -135,14 +143,43 @@ impl CodeGenerator {
         std::mem::take(&mut self.output)
     }
 
+    fn generate_defaults(&mut self, name: &str, total: usize, defaults: &[TypedExpression]) -> String {
+        let required = total - defaults.len();
+        let mut values = Vec::with_capacity(defaults.len());
+        for (k, default) in defaults.iter().enumerate() {
+            let index = required + k;
+            let saved_scopes = std::mem::replace(&mut self.scopes, vec![HashMap::new()]);
+            let saved_location = self.current_location;
+            self.current_location = self.location_id(&default.span);
+            let code = self.expr(default);
+            let function = default_function_name(name, index);
+            self.line(&format!(
+                "fn {}() -> {} {{ xe_loc({}); {} }}",
+                function,
+                default.ty.to_rust_type(),
+                self.current_location,
+                code
+            ));
+            self.current_location = saved_location;
+            self.scopes = saved_scopes;
+            values.push(format!(
+                "(|| {}) as fn() -> XeValue",
+                convert(&format!("{function}()"), &default.ty, &XeType::Unknown)
+            ));
+        }
+        format!("vec![{}]", values.join(", "))
+    }
+
     fn generate_function(
         &mut self,
         name: &str,
         params: &[(String, XeType)],
+        defaults: &[TypedExpression],
         locals: &[(String, XeType)],
         body: &[TypedStatement],
         return_type: &XeType,
     ) {
+        let default_values = self.generate_defaults(name, params.len(), defaults);
         let signature = params
             .iter()
             .map(|(p, ty)| format!("mut {}: {}", local_name(p), ty.to_rust_type()))
@@ -200,19 +237,46 @@ impl CodeGenerator {
             .collect::<Vec<_>>()
             .join(", ");
         let call = convert(&format!("{name}({args})"), return_type, &XeType::Unknown);
+        let names = params
+            .iter()
+            .map(|(p, _)| format!("{p:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
         self.line(&cached_function_value(
             &function_value_name(name),
             &format!(
-                "xe_function({:?}, {n}, Some({n}), Box::new(|__xe_args: Vec<XeValue>| -> XeValue {{ {} }}))",
+                "xe_user_function({:?}, vec![{}], {}, {}, Box::new(|__xe_args: Vec<XeValue>| -> XeValue {{ {} }}))",
                 display_name(name),
+                names,
+                params.len() - defaults.len(),
+                default_values,
                 call,
-                n = params.len()
             ),
         ));
         self.emit("\n");
     }
 
-    fn generate_struct(&mut self, name: &str, fields: &[String]) {
+    fn generate_struct(
+        &mut self,
+        name: &str,
+        fields: &[String],
+        defaults: &[TypedExpression],
+        methods: &[(String, String)],
+    ) {
+        let default_values = self.generate_defaults(name, fields.len(), defaults);
+        let methods_function = if methods.is_empty() {
+            "xe_no_methods".to_string()
+        } else {
+            let arms = methods
+                .iter()
+                .map(|(method, symbol)| format!("{method:?} => Some({}()), ", function_value_name(symbol)))
+                .collect::<String>();
+            let function = format!("xe_methods_{name}");
+            self.line(&format!(
+                "fn {function}(name: &str) -> Option<XeValue> {{ match name {{ {arms}_ => None }} }}"
+            ));
+            function
+        };
         let params = (0..fields.len())
             .map(|i| format!("a{i}: XeValue"))
             .collect::<Vec<_>>()
@@ -228,10 +292,11 @@ impl CodeGenerator {
             .join(", ");
         self.line(&format!("fn {name}({params}) -> XeValue {{"));
         self.line(&format!(
-            "    xe_make_struct({:?}, &[{}], vec![{}])",
+            "    xe_make_struct({:?}, &[{}], vec![{}], {})",
             display_name(name),
             field_literals,
-            field_values
+            field_values,
+            methods_function
         ));
         self.line("}");
         let args = (0..fields.len())
@@ -241,11 +306,13 @@ impl CodeGenerator {
         self.line(&cached_function_value(
             &function_value_name(name),
             &format!(
-                "xe_function({:?}, {n}, Some({n}), Box::new(|__xe_args: Vec<XeValue>| -> XeValue {{ {}({}) }}))",
+                "xe_user_function({:?}, vec![{}], {}, {}, Box::new(|__xe_args: Vec<XeValue>| -> XeValue {{ {}({}) }}))",
                 display_name(name),
+                field_literals,
+                fields.len() - defaults.len(),
+                default_values,
                 name,
                 args,
-                n = fields.len()
             ),
         ));
         self.emit("\n");
@@ -260,7 +327,8 @@ impl CodeGenerator {
                     Builtin::Print => "{ xe_builtin_print(__xe_args); XeValue::None }",
                     Builtin::Min => "xe_builtin_min(__xe_args)",
                     Builtin::Max => "xe_builtin_max(__xe_args)",
-                    _ => unreachable!("only print, min and max are variadic"),
+                    Builtin::Zip => "xe_builtin_zip(__xe_args)",
+                    _ => unreachable!("only print, min, max and zip are variadic"),
                 };
                 call.to_string()
             }
@@ -382,53 +450,39 @@ impl CodeGenerator {
                 let location = self.current_location;
                 let cond = self.expr_as(condition, &XeType::Boolean);
                 self.line(&format!("while {{ xe_loc({location}); {cond} }} {{"));
-                self.generate_loop_body(body, None);
+                self.generate_loop_body(body, &[], "");
                 self.line("}");
             }
             TypedStatementKind::Repeat { count, body } => {
                 let count = self.expr_as(count, &XeType::Number);
                 self.line(&format!("for _ in 0..xe_repeat_count({count}) {{"));
-                self.generate_loop_body(body, None);
+                self.generate_loop_body(body, &[], "");
                 self.line("}");
             }
             TypedStatementKind::For {
-                variable,
-                variable_type,
+                variables,
                 iterable,
                 body,
             } => {
-                let range_args = match &iterable.kind {
-                    TypedExpressionKind::BuiltinCall {
-                        builtin: Builtin::Range,
-                        args,
-                    } => Some(args),
-                    _ => None,
-                };
-                let binding = match range_args {
-                    Some(args) => {
-                        let args = args
-                            .iter()
-                            .map(|arg| self.expr_as(arg, &XeType::Number))
-                            .collect::<Vec<_>>();
-                        let (start, stop, step) = match args.as_slice() {
-                            [stop] => ("0.0".to_string(), stop.clone(), "1.0".to_string()),
-                            [start, stop] => (start.clone(), stop.clone(), "1.0".to_string()),
-                            [start, stop, step] => (start.clone(), stop.clone(), step.clone()),
-                            _ => unreachable!("range() takes 1 to 3 arguments"),
-                        };
-                        self.line(&format!(
-                            "for __xe_n in xe_range({start}, {stop}, {step}) {{"
-                        ));
-                        convert("__xe_n", &XeType::Number, variable_type)
-                    }
-                    None => {
-                        let iterable = self.expr_as(iterable, &XeType::Unknown);
-                        self.line(&format!("for __xe_item in xe_iter(&{iterable}) {{"));
-                        convert("__xe_item", &XeType::Unknown, variable_type)
-                    }
-                };
-                self.generate_loop_body(body, Some((variable, variable_type, binding)));
+                let (header, bindings) = self.loop_header(variables, iterable);
+                self.line(&format!("{header} {{"));
+                self.generate_loop_body(body, variables, &bindings);
                 self.line("}");
+            }
+            TypedStatementKind::Unpack {
+                value,
+                count,
+                assignments,
+            } => {
+                let value = self.expr_as(value, &XeType::Unknown);
+                self.temp_counter += 1;
+                let items = format!("__xe_unpack{}", self.temp_counter);
+                self.line(&format!("let {items} = xe_unpack({value}, {count});"));
+                self.unpack_stack.push(items);
+                for assignment in assignments {
+                    self.generate_statement(assignment);
+                }
+                self.unpack_stack.pop();
             }
             TypedStatementKind::Return { value } => {
                 let return_type = self.return_type.clone();
@@ -642,27 +696,85 @@ impl CodeGenerator {
         }
     }
 
+    fn loop_header(&mut self, variables: &[(String, XeType)], iterable: &TypedExpression) -> (String, String) {
+        let range_args = match &iterable.kind {
+            TypedExpressionKind::BuiltinCall {
+                builtin: Builtin::Range,
+                args,
+            } => Some(args),
+            _ => None,
+        };
+        let (header, item, item_type) = match range_args {
+            Some(args) => {
+                let args = args
+                    .iter()
+                    .map(|arg| self.expr_as(arg, &XeType::Number))
+                    .collect::<Vec<_>>();
+                let (start, stop, step) = match args.as_slice() {
+                    [stop] => ("0.0".to_string(), stop.clone(), "1.0".to_string()),
+                    [start, stop] => (start.clone(), stop.clone(), "1.0".to_string()),
+                    [start, stop, step] => (start.clone(), stop.clone(), step.clone()),
+                    _ => unreachable!("range() takes 1 to 3 arguments"),
+                };
+                (
+                    format!("for __xe_n in xe_range({start}, {stop}, {step})"),
+                    "__xe_n",
+                    XeType::Number,
+                )
+            }
+            None => {
+                let iterable = self.expr_as(iterable, &XeType::Unknown);
+                (
+                    format!("for __xe_item in xe_iter(&{iterable})"),
+                    "__xe_item",
+                    XeType::Unknown,
+                )
+            }
+        };
+        let bindings = match variables {
+            [(name, ty)] => format!(
+                "let mut {}: {} = {}; ",
+                local_name(name),
+                ty.to_rust_type(),
+                convert(item, &item_type, ty)
+            ),
+            _ => {
+                let mut code = format!(
+                    "let __xe_parts = xe_unpack({}, {}); ",
+                    convert(item, &item_type, &XeType::Unknown),
+                    variables.len()
+                );
+                for (i, (name, ty)) in variables.iter().enumerate() {
+                    code.push_str(&format!(
+                        "let mut {}: {} = {}; ",
+                        local_name(name),
+                        ty.to_rust_type(),
+                        convert(&format!("__xe_parts[{i}].clone()"), &XeType::Unknown, ty)
+                    ));
+                }
+                code
+            }
+        };
+        (header, bindings)
+    }
+
     fn generate_loop_body(
         &mut self,
         body: &[TypedStatement],
-        variable: Option<(&String, &XeType, String)>,
+        variables: &[(String, XeType)],
+        bindings: &str,
     ) {
         self.indent_level += 1;
         self.loop_try_depths.push(self.try_depth);
-        let has_variable = variable.is_some();
-        if let Some((name, ty, binding)) = variable {
-            self.line(&format!(
-                "let mut {}: {} = {};",
-                local_name(name),
-                ty.to_rust_type(),
-                binding
-            ));
-            self.scopes.push(HashMap::from([(name.clone(), ty.clone())]));
+        let has_variables = !variables.is_empty();
+        if has_variables {
+            self.line(bindings.trim_end());
+            self.scopes.push(variables.iter().cloned().collect());
         }
         for s in body {
             self.generate_statement(s);
         }
-        if has_variable {
+        if has_variables {
             self.scopes.pop();
         }
         self.loop_try_depths.pop();
@@ -801,15 +913,26 @@ impl CodeGenerator {
                 UnaryOperator::Negate => format!("(-{})", self.expr_as(operand, &XeType::Number)),
                 UnaryOperator::Not => format!("(!{})", self.expr_as(operand, &XeType::Boolean)),
             },
-            TypedExpressionKind::FunctionCall { name, args } => {
+            TypedExpressionKind::FunctionCall { name, args, order } => {
                 let param_types = self.function_params.get(name).cloned().unwrap_or_default();
-                let args = args
+                let mut codes = args
                     .iter()
                     .zip(param_types.iter())
                     .map(|(arg, ty)| self.expr_as(arg, ty))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let call = self.after_call(format!("{name}({args})"));
+                    .collect::<Vec<_>>();
+                let mut prefix = String::new();
+                for &index in order {
+                    self.temp_counter += 1;
+                    let temp = format!("__xe_a{}", self.temp_counter);
+                    prefix.push_str(&format!("let {temp} = {}; ", codes[index]));
+                    codes[index] = temp;
+                }
+                let call = if prefix.is_empty() {
+                    format!("{name}({})", codes.join(", "))
+                } else {
+                    format!("{{ {prefix}{name}({}) }}", codes.join(", "))
+                };
+                let call = self.after_call(call);
                 // A call analyzed before its callee sees a provisional `unknown` type.
                 let actual = self.function_returns.get(name).cloned().unwrap_or(XeType::Unknown);
                 convert(&call, &actual, &expr.ty)
@@ -819,16 +942,55 @@ impl CodeGenerator {
                 let actual = builtin_result_type(*builtin, &builtin.signature().return_type);
                 convert(&code, &actual, &expr.ty)
             }
-            TypedExpressionKind::DynamicCall { callee, args } => {
+            TypedExpressionKind::DynamicCall { callee, args, keywords } => {
                 let callee = self.expr_as(callee, &XeType::Unknown);
-                let args = args
-                    .iter()
-                    .map(|arg| self.expr_as(arg, &XeType::Unknown))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let call = self.after_call(format!("xe_call(&{callee}, vec![{args}])"));
+                let args = self.dynamic_args(args);
+                let call = if keywords.is_empty() {
+                    format!("xe_call(&{callee}, {args})")
+                } else {
+                    let keywords = self.keyword_args(keywords);
+                    format!("xe_call_kw(&{callee}, {args}, {keywords})")
+                };
+                let call = self.after_call(call);
                 convert(&call, &XeType::Unknown, &expr.ty)
             }
+            TypedExpressionKind::MethodCall {
+                object,
+                method,
+                args,
+                keywords,
+                fallback,
+            } => {
+                let object = self.expr_as(object, &XeType::Unknown);
+                let args = self.dynamic_args(args);
+                let keywords = self.keyword_args(keywords);
+                let fallback = match fallback {
+                    Some(function) => format!("Some({})", self.expr_as(function, &XeType::Unknown)),
+                    None => "None".to_string(),
+                };
+                let call = self.after_call(format!(
+                    "xe_call_method({object}, {method:?}, {args}, {keywords}, {fallback})"
+                ));
+                convert(&call, &XeType::Unknown, &expr.ty)
+            }
+            TypedExpressionKind::DefaultArg { function, index } => {
+                self.after_call(format!("{}()", default_function_name(function, *index)))
+            }
+            TypedExpressionKind::UnpackItem(index) => {
+                let items = self.unpack_stack.last().expect("inside an unpack");
+                format!("{items}[{index}].clone()")
+            }
+            TypedExpressionKind::Conditional {
+                condition,
+                then_value,
+                else_value,
+            } => {
+                let condition = self.expr_as(condition, &XeType::Boolean);
+                let then_value = self.expr_as(then_value, &expr.ty);
+                let else_value = self.expr_as(else_value, &expr.ty);
+                format!("(if {condition} {{ {then_value} }} else {{ {else_value} }})")
+            }
+            TypedExpressionKind::Comprehension { kind, clauses } => self.comprehension(kind, clauses),
             TypedExpressionKind::Lambda {
                 params,
                 captures,
@@ -894,6 +1056,64 @@ impl CodeGenerator {
             TypedExpressionKind::Wrap(inner) => self.expr_as(inner, &expr.ty),
             TypedExpressionKind::Unwrap(inner, ty) => self.expr_as(inner, ty),
         }
+    }
+
+    fn dynamic_args(&mut self, args: &[TypedExpression]) -> String {
+        let args = args
+            .iter()
+            .map(|arg| self.expr_as(arg, &XeType::Unknown))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("vec![{args}]")
+    }
+
+    fn keyword_args(&mut self, keywords: &[(String, TypedExpression)]) -> String {
+        let keywords = keywords
+            .iter()
+            .map(|(name, value)| format!("({name:?}, {})", self.expr_as(value, &XeType::Unknown)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("vec![{keywords}]")
+    }
+
+    fn comprehension(&mut self, kind: &TypedComprehensionKind, clauses: &[TypedComprehensionClause]) -> String {
+        let base = self.scopes.len();
+        self.temp_counter += 1;
+        let out = format!("__xe_out{}", self.temp_counter);
+        let mut code = format!("{{ let mut {out} = Vec::new(); ");
+        let mut open = 0;
+        for clause in clauses {
+            match clause {
+                TypedComprehensionClause::For { variables, iterable } => {
+                    let (header, bindings) = self.loop_header(variables, iterable);
+                    code.push_str(&format!("{header} {{ {bindings}"));
+                    self.scopes.push(variables.iter().cloned().collect());
+                }
+                TypedComprehensionClause::If(condition) => {
+                    let condition = self.expr_as(condition, &XeType::Boolean);
+                    code.push_str(&format!("if {condition} {{ "));
+                }
+            }
+            open += 1;
+        }
+        let result = match kind {
+            TypedComprehensionKind::List(element) => {
+                let element = self.expr_as(element, &XeType::Unknown);
+                code.push_str(&format!("let __xe_e = {element}; {out}.push(__xe_e); "));
+                format!("xe_list({out})")
+            }
+            TypedComprehensionKind::Map(key, value) => {
+                let key = self.expr_as(key, &XeType::Unknown);
+                let value = self.expr_as(value, &XeType::Unknown);
+                code.push_str(&format!("let __xe_e = ({key}, {value}); {out}.push(__xe_e); "));
+                format!("xe_make_map({out})")
+            }
+        };
+        self.scopes.truncate(base);
+        code.push_str(&"} ".repeat(open));
+        code.push_str(&result);
+        code.push_str(" }");
+        code
     }
 
     fn lambda(
@@ -1028,8 +1248,8 @@ impl CodeGenerator {
                     });
                 }
         let by_reference = |i: usize| match builtin {
-            Builtin::Print | Builtin::Min | Builtin::Max | Builtin::Exit => false,
-            Builtin::Append | Builtin::Insert | Builtin::Pop => i == 0,
+            Builtin::Print | Builtin::Min | Builtin::Max | Builtin::Zip | Builtin::Exit => false,
+            Builtin::Append | Builtin::Insert | Builtin::Pop | Builtin::Enumerate => i == 0,
             Builtin::Range
             | Builtin::Abs
             | Builtin::Floor
@@ -1056,7 +1276,11 @@ impl CodeGenerator {
             let name = builtin.name();
             match builtin {
                 Builtin::Print => format!("xe_builtin_print(vec![{}])", a.join(", ")),
-                Builtin::Min | Builtin::Max => format!("xe_builtin_{}(vec![{}])", name, a.join(", ")),
+                Builtin::Min | Builtin::Max | Builtin::Zip => {
+                    format!("xe_builtin_{}(vec![{}])", name, a.join(", "))
+                }
+                Builtin::Items => format!("xe_builtin_items(&{})", a[0]),
+                Builtin::Enumerate => format!("xe_builtin_enumerate(&{}, {})", a[0], optional(1)),
                 Builtin::Input => match a.first() {
                     Some(prompt) => format!("xe_builtin_input(&{prompt})"),
                     None => "xe_builtin_input(\"\")".to_string(),
@@ -1143,7 +1367,24 @@ enum Borrow {
 fn has_user_calls(expr: &TypedExpression) -> bool {
     use TypedExpressionKind as K;
     match &expr.kind {
-        K::FunctionCall { .. } | K::DynamicCall { .. } => true,
+        K::FunctionCall { .. } | K::DynamicCall { .. } | K::MethodCall { .. } | K::DefaultArg { .. } => true,
+        K::UnpackItem(_) => false,
+        K::Conditional {
+            condition,
+            then_value,
+            else_value,
+        } => has_user_calls(condition) || has_user_calls(then_value) || has_user_calls(else_value),
+        K::Comprehension { kind, clauses } => {
+            let in_kind = match kind {
+                TypedComprehensionKind::List(element) => has_user_calls(element),
+                TypedComprehensionKind::Map(key, value) => has_user_calls(key) || has_user_calls(value),
+            };
+            in_kind
+                || clauses.iter().any(|clause| match clause {
+                    TypedComprehensionClause::For { iterable, .. } => has_user_calls(iterable),
+                    TypedComprehensionClause::If(condition) => has_user_calls(condition),
+                })
+        }
         K::Number(_)
         | K::String(_)
         | K::Boolean(_)
@@ -1236,14 +1477,15 @@ fn function_value_name(name: &str) -> String {
     format!("xe_fnval_{name}")
 }
 
+fn default_function_name(name: &str, index: usize) -> String {
+    format!("xe_default{index}_{name}")
+}
+
 fn builtin_value_name(builtin: Builtin) -> String {
     format!("xe_builtin_value_{}", builtin.name())
 }
 
 /// The user-facing name of a linked symbol such as `xe_m0_count`.
-fn display_name(name: &str) -> &str {
-    name.strip_prefix("xe_m")
-        .map(|rest| rest.trim_start_matches(|c: char| c.is_ascii_digit()))
-        .and_then(|rest| rest.strip_prefix('_'))
-        .unwrap_or(name)
+fn display_name(name: &str) -> String {
+    crate::error::demangle(name)
 }

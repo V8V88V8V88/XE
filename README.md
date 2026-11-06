@@ -39,7 +39,7 @@ fun main():
     print("Fibonacci sequence up to", limit)
     
     for i in range(limit + 1):
-        print("fib(" + convert(i, "text") + ") =", fibonacci(i))
+        print(f"fib({i}) = {fibonacci(i)}")
 
 main()
 ```
@@ -49,7 +49,8 @@ main()
 ## Key Features
 
 - **Native Performance**: Compiles to native machine code via Rust; no interpreter.
-- **Pythonic Syntax and Semantics**: Indentation-based blocks, Python-style scoping, shared lists and maps, `try`/`catch`, `lambda`, slicing and `+=`.
+- **Pythonic Syntax and Semantics**: Indentation-based blocks, Python-style scoping, shared lists and maps, f-strings, comprehensions, unpacking, conditional expressions, default and keyword arguments, `try`/`catch`, `lambda`, slicing and `+=`.
+- **Structs with Methods**: Records with default field values and methods; method calls on known structs compile to direct native calls.
 - **Type Inference**: Numbers, text and booleans with known types, including function parameters and return values, compile to native `f64`, `String` and `bool`.
 - **Multi-File Modules**: Namespaced imports (`import geometry`, `geometry.area(...)`) and `from helpers import format_name`.
 - **Batteries Included**: Built-ins for text, lists, maps, math, files and command-line arguments.
@@ -184,6 +185,26 @@ from math_utils import square
 print("5 squared is", square(5))
 ```
 
+### Structs, f-strings & Comprehensions
+```xe
+struct Point:
+    x
+    y = 0
+
+    fun scaled(self, k = 2):
+        return Point(self.x * k, self.y * k)
+
+p = Point(3, y = 4).scaled()
+print(f"p = ({p.x}, {p.y})")
+
+squares = [n * n for n in range(5) if n > 0]
+low, high = min(squares), max(squares)
+print("big" if high > 10 else "small", low, high)
+
+for i, word in enumerate(["xe", "lang"]):
+    print(i, word.upper())
+```
+
 ---
 
 ## Performance Benchmark
@@ -227,7 +248,8 @@ npm run docs:dev
 - [x] Standard library: text, lists, maps, math, files, arguments
 - [x] User-defined structs / records
 - [x] `try` / `catch` error handling
-- [ ] List comprehensions
+- [x] f-strings, comprehensions, unpacking, default and keyword arguments
+- [x] Struct methods
 - [ ] Language Server Protocol (LSP) and VS Code Extension
 
 ---
