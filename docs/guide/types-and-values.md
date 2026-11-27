@@ -75,7 +75,7 @@ score = 41
 print(f"{name} scored {score + 1} points")
 ```
 
-Use `{{` and `}}` for literal braces.
+Use <code v-pre>{{</code> and <code v-pre>}}</code> for literal braces.
 
 Text functions: `upper`, `lower`, `trim`, `replace(text, old, new)`, `split(text)`, `split(text, separator)`, `join(list, separator)`, `starts_with`, `ends_with`, `find(text, part)`. Text cannot be changed in place; these return new text.
 

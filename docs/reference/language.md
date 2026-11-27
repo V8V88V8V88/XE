@@ -97,7 +97,7 @@ targets; otherwise it is a runtime error (`too many values to unpack (expected 2
 ## Text and f-strings
 
 An `f` before a string makes an f-string. Expressions in `{}` are evaluated and
-converted to text; `{{` and `}}` are literal braces:
+converted to text; <code v-pre>{{</code> and <code v-pre>}}</code> are literal braces:
 
 ```xe
 name = "Ada"
