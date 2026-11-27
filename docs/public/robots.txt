@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://xe-lang.vercel.app/sitemap.xml

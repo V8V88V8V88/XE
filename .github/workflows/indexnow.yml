@@ -1,0 +1,26 @@
+name: IndexNow
+
+on:
+  deployment_status:
+  workflow_dispatch:
+
+jobs:
+  submit:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.deployment_status.state == 'success' &&
+       github.event.deployment.environment == 'Production')
+    runs-on: ubuntu-latest
+    env:
+      HOST: xe-lang.vercel.app
+      INDEXNOW_KEY: 2c75ad2dfcbe5b50d7dc6bbf03bc12a9
+    steps:
+      - name: Submit sitemap URLs to IndexNow (Bing, Yandex, etc.)
+        run: |
+          curl -fsS "https://$HOST/$INDEXNOW_KEY.txt" >/dev/null || { echo "Key file not live yet"; exit 1; }
+          curl -fsSL "https://$HOST/sitemap.xml" | grep -o '<loc>[^<]*' | sed 's/<loc>//' | head -n 10000 > urls.txt
+          echo "Submitting $(wc -l < urls.txt) URLs"
+          jq -R . urls.txt | jq -s --arg host "$HOST" --arg key "$INDEXNOW_KEY" \
+            '{host: $host, key: $key, keyLocation: "https://\($host)/\($key).txt", urlList: .}' \
+          | curl -sS -w '\nHTTP %{http_code}\n' -X POST https://api.indexnow.org/indexnow \
+              -H 'Content-Type: application/json; charset=utf-8' --data-binary @-
